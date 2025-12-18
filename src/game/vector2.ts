@@ -4,6 +4,16 @@
 export class Vector2 {
   constructor(public x: number = 0, public y: number = 0) {}
 
+  /**
+   * Set both components.
+   * Useful for code that mirrors Three.js' Vector2/Vector3 APIs.
+   */
+  set(x: number, y: number): this {
+    this.x = x;
+    this.y = y;
+    return this;
+  }
+
   clone(): Vector2 {
     return new Vector2(this.x, this.y);
   }
