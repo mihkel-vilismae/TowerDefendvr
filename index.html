@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+    <title>Death Rally Lite+ 3D (Three.js + WebXR)</title>
+    <style>
+      html, body { margin:0; padding:0; width:100%; height:100%; overflow:hidden; background:#0b0d12; color:#e7eaf0; }
+      #app { position:relative; width:100%; height:100%; }
+      canvas { display:block; }
+      .hud {
+        position:absolute;
+        left:12px;
+        top:12px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        font-size: 13px;
+        line-height: 1.35;
+        padding:10px 12px;
+        border-radius: 12px;
+        background: rgba(10, 12, 18, 0.62);
+        backdrop-filter: blur(8px);
+        border: 1px solid rgba(255,255,255,0.08);
+        box-shadow: 0 10px 25px rgba(0,0,0,0.35);
+        max-width: 360px;
+        user-select: none;
+      }
+      .hud b { color:#fff; }
+      .hud .row { display:flex; justify-content:space-between; gap:16px; }
+      .hud .dim { color: rgba(231,234,240,0.72); }
+      .panel {
+        position:absolute;
+        right:12px;
+        top:12px;
+        width: 320px;
+        padding:10px 12px;
+        border-radius: 12px;
+        background: rgba(10, 12, 18, 0.62);
+        backdrop-filter: blur(8px);
+        border: 1px solid rgba(255,255,255,0.08);
+        box-shadow: 0 10px 25px rgba(0,0,0,0.35);
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        user-select: none;
+      }
+      .panel h1 { font-size: 14px; margin: 0 0 8px 0; }
+      .panel button {
+        appearance:none; border:0; border-radius: 10px; padding:10px 12px;
+        background: rgba(255,255,255,0.10); color:#fff; cursor:pointer;
+      }
+      .panel button:hover { background: rgba(255,255,255,0.16); }
+      .panel .small { font-size: 12px; color: rgba(231,234,240,0.72); line-height:1.4; }
+      #reticle {
+        position:absolute;
+        left:50%; top:50%; transform:translate(-50%,-50%);
+        width:10px; height:10px;
+        border: 1px solid rgba(255,255,255,0.35);
+        border-radius: 999px;
+        pointer-events:none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <div id="reticle"></div>
+      <div class="hud" id="hud"></div>
+      <div class="panel" id="panel">
+        <h1>Death Rally Lite+ 3D</h1>
+        <div class="small">
+          <b>WASD/Arrows</b> drive • <b>Space</b> MG • <b>Shift</b> Mine • <b>Tab</b> cycle target • <b>F</b> homing missile (needs lock) • <b>Q</b> rocket • <b>E</b> EMP<br/>
+          <b>VR:</b> click “Enter VR” when available. Left thumbstick drives. Trigger fires MG. Squeeze drops mine. A/X cycles target.
+        </div>
+        <div style="height:10px"></div>
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+          <button id="startBtn">Start</button>
+          <button id="btnRestart">Restart</button>
+          <label class="small" style="display:flex; gap:6px; align-items:center;">
+            <input id="bloomToggle" type="checkbox" checked /> Bloom
+          </label>
+          <select id="vehicleSel">
+            <option value="sports">Sports</option>
+            <option value="muscle">Muscle</option>
+            <option value="buggy">Buggy</option>
+            <option value="tank">Tank</option>
+          </select>
+        </div>
+        <div style="height:8px"></div>
+        <div id="vrHelp" class="small">VR available when WebXR is supported. Use the “Enter VR” button that appears at the bottom of the page.</div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

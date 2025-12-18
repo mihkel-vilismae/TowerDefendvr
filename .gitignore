@@ -1,0 +1,5 @@
+# Ignore compiled output and temporary files
+dist/
+src/tests/
+node_modules/
+*.log
