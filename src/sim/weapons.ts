@@ -312,3 +312,43 @@ export class HomingMissileWeapon extends WeaponBase {
     }
   }
 }
+
+/**
+ * Minigun: a faster-firing machinegun variant. Still hitscan, but with a shorter cooldown.
+ */
+export class Minigun extends MachineGun {
+  constructor(owner: Entity, cooldown = 0.03, ammo: number | null = null, range = 30, damage = 2) {
+    super(owner, cooldown, ammo, range, damage);
+  }
+}
+
+export interface AirstrikeSink {
+  addAirstrike(owner: Entity, x: number, y: number, delay: number, radius: number, damage: number): void;
+}
+
+/**
+ * Airstrike weapon: schedules an explosion at a target's current position after a short delay.
+ * This is intended for helicopter-only loadouts.
+ */
+export class AirstrikeWeapon extends WeaponBase {
+  delay: number;
+  radius: number;
+  damage: number;
+  sink: AirstrikeSink;
+
+  constructor(owner: Entity, cooldown: number, ammo: number | null, delay: number, radius: number, damage: number, sink: AirstrikeSink) {
+    super(owner, cooldown, ammo);
+    this.delay = delay;
+    this.radius = radius;
+    this.damage = damage;
+    this.sink = sink;
+  }
+
+  fire(simTime: number, target: Entity): void {
+    if (!this.canFire(simTime)) return;
+    this.lastFireTime = simTime;
+    if (this.ammo !== null) this.ammo!--;
+    // Schedule strike at target location (even if target later moves; this is a simple strike).
+    this.sink.addAirstrike(this.owner, target.car.position.x, target.car.position.y, this.delay, this.radius, this.damage);
+  }
+}

@@ -4,6 +4,44 @@ import { MachineGun, MineWeapon, HomingMissileWeapon, RocketWeapon, Shotgun, EMP
 import { Pickup, HealthPickup, AmmoPickup, ShieldPickup, ScorePickup, WeaponPickup } from './pickups';
 import { Vector2 } from '../game/vector2';
 
+export class AirstrikeInstance {
+  owner: Entity;
+  position: Vector2;
+  delay: number;
+  radius: number;
+  damage: number;
+  elapsed: number = 0;
+  exploded: boolean = false;
+
+  constructor(owner: Entity, x: number, y: number, delay: number, radius: number, damage: number) {
+    this.owner = owner;
+    this.position = new Vector2(x, y);
+    this.delay = delay;
+    this.radius = radius;
+    this.damage = damage;
+  }
+
+  update(dt: number, entities: Entity[]): boolean {
+    if (this.exploded) return true;
+    this.elapsed += dt;
+    if (this.elapsed < this.delay) return false;
+
+    // Explode
+    const r2 = this.radius * this.radius;
+    for (const e of entities) {
+      if (!e.alive) continue;
+      if (e === this.owner) continue;
+      const dx = e.car.position.x - this.position.x;
+      const dy = e.car.position.y - this.position.y;
+      if (dx * dx + dy * dy <= r2) {
+        e.takeDamage(this.damage);
+      }
+    }
+    this.exploded = true;
+    return true;
+  }
+}
+
 /**
  * Options for scoring behaviour when killing non-hostile onlookers.
  */
@@ -32,6 +70,13 @@ export class GameSimulation {
   streak: number = 0;
   heat: number = 0; // wanted level; increases on onlooker kills
   options: GameOptions;
+
+  /** Debug/gameplay toggles controlled by UI. */
+  freezeEnemiesMovement: boolean = false;
+  disableEnemyAttacks: boolean = false;
+
+  /** Pending airstrikes (helicopter-only weapon). */
+  airstrikes: AirstrikeInstance[] = [];
   // timers for spawning
   enemySpawnCooldown = 5;
   pickupSpawnCooldown = 10;
@@ -63,6 +108,11 @@ export class GameSimulation {
     this.pickups.push(pickup);
   }
 
+  /** Adds a pending airstrike. */
+  addAirstrike(strike: AirstrikeInstance): void {
+    this.airstrikes.push(strike);
+  }
+
   /**
    * Updates the simulation by dt seconds. Inputs for player must be handled externally
    * by updating the player's Car before calling this method. Enemy AI will be updated here.
@@ -80,7 +130,10 @@ export class GameSimulation {
     // 1. Update AI for enemies
     for (const enemy of this.enemies) {
       if (!enemy.alive) continue;
-      enemy.aiUpdate(this.simTime, dt, this.player, []);
+      enemy.aiUpdate(this.simTime, dt, this.player, [], {
+        allowMove: !this.freezeEnemiesMovement,
+        allowAttack: !this.disableEnemyAttacks,
+      });
     }
     // 2. Update Onlookers wandering
     for (const ol of this.onlookers) {
@@ -97,6 +150,17 @@ export class GameSimulation {
     for (const rw of this.rocketWeapons) {
       rw.updateRockets(dt);
     }
+
+    // 3b. Update airstrikes
+    if (this.airstrikes.length > 0) {
+      const ents = [this.player, ...this.enemies, ...this.onlookers];
+      for (let i = this.airstrikes.length - 1; i >= 0; i--) {
+        const strike = this.airstrikes[i];
+        const done = strike.update(dt, ents);
+        if (done) this.airstrikes.splice(i, 1);
+      }
+    }
+
     // 4. Handle pickups collisions with player and enemies
     for (let i = this.pickups.length - 1; i >= 0; i--) {
       const p = this.pickups[i];

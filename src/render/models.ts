@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 
-export type VehicleVisualType = 'sports' | 'muscle' | 'tank' | 'buggy' | 'enemy' | 'onlooker';
+export type VehicleVisualType = 'sports' | 'muscle' | 'tank' | 'buggy' | 'heli' | 'enemy' | 'enemyHeli' | 'onlooker';
 
 function makeMat(color: THREE.ColorRepresentation, metalness = 0.2, roughness = 0.55, emissive?: THREE.ColorRepresentation) {
   const m = new THREE.MeshStandardMaterial({ color, metalness, roughness });
@@ -37,9 +37,53 @@ export function createVehicleMesh(type: VehicleVisualType): THREE.Object3D {
     type === 'muscle' ? 0xff4b4b :
     type === 'buggy' ? 0xffd04a :
     type === 'tank' ? 0x63ff7a :
+    type === 'heli' ? 0xa9b6ff :
+    type === 'enemyHeli' ? 0xff7cff :
     type === 'enemy' ? 0xff7cff : 0xffffff;
 
-  const accent = type === 'enemy' ? 0xff2a2a : 0x4df3ff;
+  const accent = (type === 'enemy' || type === 'enemyHeli') ? 0xff2a2a : 0x4df3ff;
+
+  if (type === 'heli' || type === 'enemyHeli') {
+    const body = new THREE.Mesh(new THREE.BoxGeometry(1.05, 0.28, 1.35), makeMat(baseColor, 0.28, 0.45));
+    body.position.y = 0.62;
+    g.add(body);
+    const cabin = new THREE.Mesh(new THREE.BoxGeometry(0.85, 0.25, 0.6), makeMat(0x1b1f2a, 0.35, 0.25, accent));
+    cabin.position.set(0, 0.78, 0.15);
+    g.add(cabin);
+    const tail = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.18, 1.2), makeMat(baseColor, 0.25, 0.55));
+    tail.position.set(0, 0.66, -1.25);
+    g.add(tail);
+    const skidsMat = makeMat(0x1b1f2a, 0.2, 0.85);
+    const skid1 = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 1.1, 8), skidsMat);
+    skid1.rotation.z = Math.PI * 0.5;
+    skid1.position.set(-0.35, 0.4, 0);
+    const skid2 = skid1.clone();
+    skid2.position.x = 0.35;
+    const crossBar = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.8, 8), skidsMat);
+    crossBar.rotation.x = Math.PI * 0.5;
+    crossBar.position.set(0, 0.42, 0);
+    g.add(skid1, skid2, crossBar);
+
+    // Main rotor (named so main loop can spin it)
+    const rotor = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.03, 0.18), makeMat(0x1b1f2a, 0.25, 0.65, accent));
+    rotor.name = 'rotor_main';
+    rotor.position.set(0, 0.93, 0.05);
+    g.add(rotor);
+    const rotor2 = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.03, 2.6), makeMat(0x1b1f2a, 0.25, 0.65, accent));
+    rotor2.position.copy(rotor.position);
+    rotor2.name = 'rotor_main_2';
+    g.add(rotor2);
+
+    // Tail rotor
+    const tailRotor = new THREE.Mesh(new THREE.BoxGeometry(0.65, 0.02, 0.12), makeMat(0x1b1f2a, 0.25, 0.65));
+    tailRotor.name = 'rotor_tail';
+    tailRotor.position.set(0, 0.72, -1.85);
+    tailRotor.rotation.y = Math.PI * 0.5;
+    g.add(tailRotor);
+
+    shadow(g);
+    return g;
+  }
 
   if (type === 'tank') {
     const hull = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.35, 1.7), makeMat(baseColor, 0.25, 0.55));

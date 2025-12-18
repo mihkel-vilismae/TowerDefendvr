@@ -17,6 +17,12 @@ export class Entity {
   /** If > simTime, entity cannot fire weapons (EMP disable). */
   weaponsDisabledUntil: number = 0;
 
+  /** If true, entity cannot take damage (used for player helicopter). */
+  invulnerable: boolean = false;
+
+  /** If true, renderer may lift this entity above ground (helicopters). */
+  hovering: boolean = false;
+
   constructor(car: Car, maxHP: number) {
     this.car = car;
     this.maxHP = maxHP;
@@ -28,7 +34,9 @@ export class Entity {
    * Inflict damage on this entity. Marks entity as dead when HP <= 0.
    */
   takeDamage(amount: number): void {
+    if (this.invulnerable) return;
     if (!this.alive) return;
+    if (this.invulnerable) return;
     this.hp -= amount;
     if (this.hp <= 0) {
       this.hp = 0;
@@ -56,7 +64,15 @@ export function applyEMP(simTime: number, target: Entity, duration: number, slow
  */
 export class Enemy extends Entity {
   /** simplistic AI update: accelerate toward player and optionally fire weapons */
-  aiUpdate(simTime: number, dt: number, player: Entity, obstacles: Vector2[]): void {
+  aiUpdate(
+    simTime: number,
+    dt: number,
+    player: Entity,
+    obstacles: Vector2[],
+    opts: { allowMove?: boolean; allowAttack?: boolean } = {}
+  ): void {
+    const allowMove = opts.allowMove !== false;
+    const allowAttack = opts.allowAttack !== false;
     // Seek player: compute vector from enemy to player and accelerate toward it
     const toPlayer = new Vector2(player.car.position.x - this.car.position.x,
                                 player.car.position.y - this.car.position.y);
@@ -70,10 +86,12 @@ export class Enemy extends Entity {
       right: cross > 0
     };
     // Drive the car
-    this.car.update(dt, input);
+    if (allowMove) {
+      this.car.update(dt, input);
+    }
     // Simple avoidance: if near any obstacle, turn away (not implemented due to time)
     // Weapon usage: fire first available weapon if target in range
-    if (simTime >= this.weaponsDisabledUntil) {
+    if (allowAttack && simTime >= this.weaponsDisabledUntil) {
       for (const weapon of this.weapons) {
         if (weapon.autoFire && weapon.canFire(simTime)) {
           // For AI, always choose player as target

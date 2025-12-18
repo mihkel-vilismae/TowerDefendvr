@@ -56,11 +56,25 @@
         border-radius: 999px;
         pointer-events:none;
       }
+
+      #minimap {
+        position:absolute;
+        left:12px;
+        bottom:12px;
+        width: 200px;
+        height: 200px;
+        border-radius: 12px;
+        background: rgba(10,12,18,0.55);
+        border: 1px solid rgba(255,255,255,0.08);
+        box-shadow: 0 10px 25px rgba(0,0,0,0.35);
+        pointer-events:none;
+      }
     </style>
   </head>
   <body>
     <div id="app">
       <div id="reticle"></div>
+      <canvas id="minimap" width="200" height="200"></canvas>
       <div class="hud" id="hud"></div>
       <div class="panel" id="panel">
         <h1>Death Rally Lite+ 3D</h1>
@@ -72,15 +86,30 @@
         <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
           <button id="startBtn">Start</button>
           <button id="btnRestart">Restart</button>
+          <button id="btnFreezeEnemies">Freeze</button>
+          <button id="btnStopAttacks">No-Attack</button>
           <label class="small" style="display:flex; gap:6px; align-items:center;">
             <input id="bloomToggle" type="checkbox" checked /> Bloom
+          </label>
+          <label class="small" style="display:flex; gap:6px; align-items:center;">
+            <input id="slowmoToggle" type="checkbox" /> Slow-mo
+          </label>
+          <label class="small" style="display:flex; gap:6px; align-items:center;">
+            <input id="enemyHeliToggle" type="checkbox" checked /> Enemy helis
           </label>
           <select id="vehicleSel">
             <option value="sports">Sports</option>
             <option value="muscle">Muscle</option>
             <option value="buggy">Buggy</option>
             <option value="tank">Tank</option>
+            <option value="heli">Helicopter</option>
           </select>
+        </div>
+        <div style="height:10px"></div>
+        <div class="small" style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+          <span><b>Start HP</b></span>
+          <input id="startHp" type="range" min="50" max="1000" value="160" />
+          <span id="startHpLabel">160</span>
         </div>
         <div style="height:8px"></div>
         <div id="vrHelp" class="small">VR available when WebXR is supported. Use the “Enter VR” button that appears at the bottom of the page.</div>
