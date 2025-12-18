@@ -336,7 +336,24 @@ export class AirstrikeWeapon extends WeaponBase {
   damage: number;
   sink: AirstrikeSink;
 
-  constructor(owner: Entity, cooldown: number, ammo: number | null, delay: number, radius: number, damage: number, sink: AirstrikeSink) {
+  /**
+   * @param owner Entity that owns this weapon
+   * @param sink Receives scheduled airstrikes
+   * @param cooldown Seconds between calls
+   * @param delay Seconds between call and explosion
+   * @param radius Explosion radius
+   * @param damage Explosion damage
+   * @param ammo Ammo count (null = infinite)
+   */
+  constructor(
+    owner: Entity,
+    sink: AirstrikeSink,
+    cooldown: number,
+    delay: number,
+    radius: number,
+    damage: number,
+    ammo: number | null = null
+  ) {
     super(owner, cooldown, ammo);
     this.delay = delay;
     this.radius = radius;

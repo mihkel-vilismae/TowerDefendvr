@@ -25,6 +25,29 @@ describe('AirstrikeWeapon', () => {
     expect(w.canFire(1)).toBe(false);
     expect(w.canFire(3.01)).toBe(true);
   });
+
+  it('supports optional ammo and stops firing when ammo reaches zero', () => {
+    const owner = new Entity(new Car(), 100);
+    const target = new Entity(new Car(), 100);
+
+    let calls = 0;
+    const sink = {
+      addAirstrike: () => {
+        calls++;
+      }
+    };
+
+    // 2 ammo total
+    const w = new AirstrikeWeapon(owner, sink as any, 0.1, 0.1, 3.0, 10, 2);
+    expect(w.canFire(0)).toBe(true);
+    w.fire(0, target);
+    expect(calls).toBe(1);
+    expect(w.canFire(0.11)).toBe(true);
+    w.fire(0.11, target);
+    expect(calls).toBe(2);
+    // ammo now 0
+    expect(w.canFire(0.22)).toBe(false);
+  });
 });
 
 describe('AirstrikeInstance', () => {

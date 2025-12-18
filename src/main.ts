@@ -230,7 +230,8 @@ function attachDefaultLoadout(ent: Entity, opts: { airstrikeSink?: { addAirstrik
     ent.weapons.push(new Minigun(ent, 0.03, null, 30, 2));
     ent.weapons.push(new HomingMissileWeapon(ent, 2.3, 8, 28, 7.6, 2.6, 36));
     if (opts.airstrikeSink) {
-      ent.weapons.push(new AirstrikeWeapon(ent, 6.5, 6, 0.85, 7.5, 55, opts.airstrikeSink));
+      // AirstrikeWeapon signature: (owner, sink, cooldown, delay, radius, damage, ammo?)
+      ent.weapons.push(new AirstrikeWeapon(ent, opts.airstrikeSink, 6.5, 0.85, 7.5, 55, 6));
     }
     return;
   }
