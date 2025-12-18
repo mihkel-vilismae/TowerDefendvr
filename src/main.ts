@@ -609,10 +609,10 @@ function updateHUD() {
 }
 
 function drawMinimap() {
-  if (!minimapCanvas) return;
-  const ctx = minimapCanvas.getContext('2d');
+  // `minimap` is required (validated at startup via requireEl).
+  const ctx = minimap.getContext('2d');
   if (!ctx) return;
-  ctx.clearRect(0, 0, minimapCanvas.width, minimapCanvas.height);
+  ctx.clearRect(0, 0, minimap.width, minimap.height);
   if (!sim || !player) {
     ctx.globalAlpha = 0.6;
     ctx.fillStyle = '#e6eaf5';
@@ -621,8 +621,8 @@ function drawMinimap() {
     ctx.globalAlpha = 1;
     return;
   }
-  const w = minimapCanvas.width;
-  const h = minimapCanvas.height;
+  const w = minimap.width;
+  const h = minimap.height;
   const cx = w * 0.5;
   const cy = h * 0.5;
   // world extent (match arena size roughly)

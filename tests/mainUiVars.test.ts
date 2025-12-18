@@ -24,5 +24,8 @@ describe('main.ts UI refs are declared once', () => {
     expect(count(src, 'const startHpLabel')).toBe(1);
     expect(count(src, 'const startHpSlider')).toBe(1);
     expect(count(src, 'const minimap')).toBe(1);
+
+    // Regression: ensure we don't reference an old variable name that isn't declared.
+    expect(src.includes('minimapCanvas')).toBe(false);
   });
 });
