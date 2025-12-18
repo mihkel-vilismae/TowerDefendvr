@@ -37,13 +37,9 @@ const vehicleSel = requireEl<HTMLSelectElement>('#vehicleSel');
 const bloomToggle = el<HTMLInputElement>('#bloomToggle');
 const slowmoToggle = el<HTMLInputElement>('#slowmoToggle');
 const enemyHeliToggle = el<HTMLInputElement>('#enemyHeliToggle');
-const startHp = el<HTMLInputElement>('#startHp');
-const startHpLabel = el<HTMLSpanElement>('#startHpLabel');
-const minimapCanvas = el<HTMLCanvasElement>('#minimap');
-const slowmoToggle = el<HTMLInputElement>('#slowmoToggle');
-const enemyHeliToggle = el<HTMLInputElement>('#enemyHeliToggle');
 const startHpSlider = el<HTMLInputElement>('#startHp');
 const startHpLabel = el<HTMLSpanElement>('#startHpLabel');
+// minimap is required for non-VR UX; fail early with a clear error if missing.
 const minimap = requireEl<HTMLCanvasElement>('#minimap');
 const vrHelp = requireEl<HTMLDivElement>('#vrHelp');
 
