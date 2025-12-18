@@ -17,6 +17,8 @@ import { ReplayBuffer } from './game/replay';
 import { computeDesktopCamera, DesktopCameraMode } from './render/cameraMath';
 import { TabletopRig } from './xr/tabletop';
 import { checkedOr, onChange, requireEl } from './ui/safeDom';
+import { RaceTracker } from './sim/race';
+import { Vector2 } from './game/vector2';
 
 type VehicleChoice = 'sports' | 'muscle' | 'buggy' | 'tank' | 'heli';
 
@@ -37,6 +39,8 @@ const vehicleSel = requireEl<HTMLSelectElement>('#vehicleSel');
 const bloomToggle = el<HTMLInputElement>('#bloomToggle');
 const slowmoToggle = el<HTMLInputElement>('#slowmoToggle');
 const enemyHeliToggle = el<HTMLInputElement>('#enemyHeliToggle');
+const modeSel = requireEl<HTMLSelectElement>('#modeSel');
+const lapsSel = requireEl<HTMLSelectElement>('#lapsSel');
 const startHpSlider = el<HTMLInputElement>('#startHp');
 const startHpLabel = el<HTMLSpanElement>('#startHpLabel');
 // minimap is required for non-VR UX; fail early with a clear error if missing.
@@ -100,6 +104,97 @@ const tabletop = new TabletopRig();
 scene.add(tabletop.root);
 const arena = createArena();
 tabletop.root.add(arena);
+
+// --- Race track visuals + tracker (simple loop) ---
+type GameMode = 'arena' | 'race';
+let gameMode: GameMode = 'arena';
+let raceTracker: RaceTracker | null = null;
+let raceStartSimTime = 0;
+
+const raceTrackGroup = new THREE.Group();
+raceTrackGroup.visible = false;
+tabletop.root.add(raceTrackGroup);
+
+// A simple rectangular loop inside the arena.
+const raceLoopPts = [
+  new Vector2(-38, -24),
+  new Vector2(38, -24),
+  new Vector2(38, 24),
+  new Vector2(-38, 24),
+];
+
+// Finish line segment on the left edge.
+const raceFinishA = new Vector2(-38, -6);
+const raceFinishB = new Vector2(-38, 6);
+
+// Checkpoints: midpoints of each edge (must be hit in order).
+const raceCheckpoints = [
+  new Vector2(0, -24),
+  new Vector2(38, 0),
+  new Vector2(0, 24),
+  new Vector2(-38, 0),
+];
+
+function buildRaceTrackVisuals() {
+  raceTrackGroup.clear();
+
+  // Track centerline
+  const linePts = [...raceLoopPts, raceLoopPts[0]].map(p => new THREE.Vector3(p.x, 0.06, p.y));
+  const geo = new THREE.BufferGeometry().setFromPoints(linePts);
+  const mat = new THREE.LineBasicMaterial({ color: 0x4df3ff, transparent: true, opacity: 0.55 });
+  const line = new THREE.Line(geo, mat);
+  raceTrackGroup.add(line);
+
+  // Low walls
+  const wallMat = new THREE.MeshStandardMaterial({ color: 0x101624, metalness: 0.1, roughness: 0.6, emissive: new THREE.Color(0x05060a) });
+  const wallH = 1.2;
+  const wallT = 0.8;
+  for (let i = 0; i < raceLoopPts.length; i++) {
+    const a = raceLoopPts[i];
+    const b = raceLoopPts[(i + 1) % raceLoopPts.length];
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const len = Math.sqrt(dx * dx + dy * dy);
+    const wall = new THREE.Mesh(new THREE.BoxGeometry(len, wallH, wallT), wallMat);
+    wall.position.set((a.x + b.x) * 0.5, wallH * 0.5, (a.y + b.y) * 0.5);
+    wall.rotation.y = Math.atan2(dy, dx);
+    wall.castShadow = true;
+    wall.receiveShadow = true;
+    raceTrackGroup.add(wall);
+  }
+
+  // Finish line
+  const finish = new THREE.Mesh(
+    new THREE.PlaneGeometry(12, 2.6),
+    new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: new THREE.Color(0x9cf4ff), emissiveIntensity: 1.2, transparent: true, opacity: 0.85 })
+  );
+  finish.rotation.x = -Math.PI / 2;
+  finish.position.set((raceFinishA.x + raceFinishB.x) * 0.5, 0.07, (raceFinishA.y + raceFinishB.y) * 0.5);
+  raceTrackGroup.add(finish);
+
+  // Checkpoints markers
+  const cpMat = new THREE.MeshStandardMaterial({ color: 0xff4df1, emissive: new THREE.Color(0x551144), emissiveIntensity: 0.9, transparent: true, opacity: 0.75 });
+  for (const p of raceCheckpoints) {
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 0.7, 0.15, 18), cpMat);
+    m.position.set(p.x, 0.08, p.y);
+    m.rotation.x = Math.PI / 2;
+    raceTrackGroup.add(m);
+  }
+}
+
+buildRaceTrackVisuals();
+
+function setGameMode(m: GameMode) {
+  gameMode = m;
+  raceTrackGroup.visible = (m === 'race');
+}
+
+// Keep mode toggle responsive even before starting.
+modeSel.addEventListener('change', () => {
+  const v = (modeSel.value === 'race') ? 'race' : 'arena';
+  setGameMode(v);
+});
+setGameMode(modeSel.value === 'race' ? 'race' : 'arena');
 
 // Switch between desktop 1:1 world and VR tabletop diorama.
 renderer.xr.addEventListener('sessionstart', () => {
@@ -536,7 +631,25 @@ function resetWorld() {
 
   const choice = (vehicleSel.value as VehicleChoice) || 'sports';
   player = makePlayer(choice);
-  player.car.position.set(0, 0);
+  // Respect mode selection.
+  setGameMode(modeSel.value === 'race' ? 'race' : 'arena');
+
+  if (gameMode === 'race') {
+    // Spawn just before the finish line so the first cross starts the lap once checkpoints are met.
+    player.car.position.set(-44, 0);
+    const laps = Math.max(1, Math.min(10, Number(lapsSel.value) || 3));
+    raceTracker = new RaceTracker({
+      checkpoints: raceCheckpoints,
+      checkpointRadius: 4.0,
+      finishA: raceFinishA,
+      finishB: raceFinishB,
+      lapsToFinish: laps,
+    });
+    raceStartSimTime = 0;
+  } else {
+    raceTracker = null;
+    player.car.position.set(0, 0);
+  }
 
   // Apply start HP slider (up to 1000)
   const hp0 = Math.max(50, Math.min(1000, Number(startHp?.value ?? 160)));
@@ -554,9 +667,18 @@ function resetWorld() {
   targeting = new TargetingSystem();
 
   addVisual(player, choice);
-  spawnEnemies(5);
-  spawnOnlookers(16);
-  for (let i = 0; i < 6; i++) spawnPickup();
+  // In race mode we keep the chaos light so the track is readable.
+  if (gameMode === 'race') {
+    spawnEnemies(3);
+    spawnOnlookers(6);
+    for (let i = 0; i < 4; i++) spawnPickup();
+    // Avoid infinite scaling mid-race.
+    sim.enemySpawnCooldown = 9999;
+  } else {
+    spawnEnemies(5);
+    spawnOnlookers(16);
+    for (let i = 0; i < 6; i++) spawnPickup();
+  }
 
   // Apply enemy helicopter toggle
   setEnemyHelicoptersEnabled(checkedOr(enemyHeliToggle, true));
@@ -569,7 +691,9 @@ function resetWorld() {
   freezeEnemiesBtn.textContent = 'Freeze';
   stopAttacksBtn.textContent = 'No-Attack';
 
-  vrHelp.textContent = 'VR: Enter VR button (bottom). In VR: stick steers/throttle; trigger fires MG; grip drops mine; Tab cycles target on desktop.';
+  vrHelp.textContent = gameMode === 'race'
+    ? 'Race mode: hit checkpoints in order, then cross the finish line. VR: Enter VR button (bottom).'
+    : 'Arena mode: survive and score. VR: Enter VR button (bottom).';
 }
 
 startBtn.addEventListener('click', () => resetWorld());
@@ -604,7 +728,10 @@ function updateHUD() {
   }
   const tgt = targeting?.getTarget();
   const speed = player.car.velocity.length().toFixed(1);
-  hud.textContent = `HP ${player.hp.toFixed(0)}/${player.maxHP}  |  Speed ${speed}  |  Score ${sim.score}  |  Streak ${sim.streak}  |  x${sim.multiplier}  |  Heat ${sim.heat}\n` +
+  const raceLine = (raceTracker && gameMode === 'race')
+    ? ` | Lap ${raceTracker.lap}/${Math.max(1, Number(lapsSel.value) || 3)} | CP ${raceTracker.checkpointIndex}/${raceCheckpoints.length} | Time ${(sim.simTime - (raceStartSimTime || sim.simTime)).toFixed(1)}s${raceTracker.finished ? ' (FINISH!)' : ''}`
+    : '';
+  hud.textContent = `HP ${player.hp.toFixed(0)}/${player.maxHP}  |  Speed ${speed}  |  Score ${sim.score}  |  Streak ${sim.streak}  |  x${sim.multiplier}  |  Heat ${sim.heat}${raceLine}\n` +
     `Target: ${tgt ? (vehicleType.get(tgt) ?? 'target') : 'none'}  |  Lock ${(lockProgress * 100).toFixed(0)}%${locked ? ' (LOCKED)' : ''}`;
 }
 
@@ -640,6 +767,31 @@ function drawMinimap() {
   ctx.beginPath();
   ctx.arc(cx, cy, Math.min(w, h) * 0.44, 0, Math.PI * 2);
   ctx.stroke();
+
+  // Race overlay (centerline + finish)
+  if (gameMode === 'race') {
+    ctx.strokeStyle = 'rgba(77,243,255,0.35)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    const p0 = toPx(raceLoopPts[0].x, raceLoopPts[0].y);
+    ctx.moveTo(p0.x, p0.y);
+    for (let i = 1; i < raceLoopPts.length; i++) {
+      const p = toPx(raceLoopPts[i].x, raceLoopPts[i].y);
+      ctx.lineTo(p.x, p.y);
+    }
+    ctx.closePath();
+    ctx.stroke();
+
+    // finish line
+    ctx.strokeStyle = 'rgba(156,244,255,0.8)';
+    ctx.lineWidth = 3;
+    const fa = toPx(raceFinishA.x, raceFinishA.y);
+    const fb = toPx(raceFinishB.x, raceFinishB.y);
+    ctx.beginPath();
+    ctx.moveTo(fa.x, fa.y);
+    ctx.lineTo(fb.x, fb.y);
+    ctx.stroke();
+  }
 
   // pickups
   ctx.fillStyle = 'rgba(77,243,255,0.85)';
@@ -865,9 +1017,25 @@ function step(now: number) {
     while (acc >= fixedDt) {
       // apply movement slow scaling
       const effectiveDt = fixedDt * (player.moveScale ?? 1);
+      const prevPos = player.car.position.clone();
       player.car.update(effectiveDt, input);
       clampArena(player);
       sim.update(fixedDt);
+
+      // Race mode: checkpoints + finish line.
+      if (raceTracker && gameMode === 'race') {
+        // start time when simulation begins
+        if (raceStartSimTime === 0) raceStartSimTime = sim.simTime;
+        const rr = raceTracker.update(prevPos, player.car.position);
+        if (rr.lapJustCompleted) {
+          sim.score += 250;
+        }
+        if (rr.finished) {
+          // Soft-freeze enemies so player can celebrate.
+          sim.freezeEnemiesMovement = true;
+          sim.disableEnemyAttacks = true;
+        }
+      }
 
       // record replay frame
       replayBuf.push(sim.simTime, { px: player.car.position.x, pz: player.car.position.y, heading: player.car.heading });
