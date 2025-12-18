@@ -13,6 +13,7 @@ import { GameSimulation, OnlookerKillRule } from './sim/game';
 import { TargetingSystem } from './sim/targeting';
 import { createArena, createVehicleMesh, VehicleVisualType } from './render/models';
 import { ParticleSystem } from './render/particles';
+import { computeDesktopCamera, DesktopCameraMode } from './render/cameraMath';
 import { TabletopRig } from './xr/tabletop';
 import { checkedOr, onChange, requireEl } from './ui/safeDom';
 
@@ -47,9 +48,27 @@ document.body.appendChild(VRButton.createButton(renderer));
 const scene = new THREE.Scene();
 scene.fog = new THREE.Fog(0x0b0d12, 25, 170);
 
-const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 600);
-camera.position.set(0, 42, 58);
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 900);
+// Desktop defaults: a closer view so the game is playable in regular browser mode.
+camera.position.set(0, 65, 75);
 camera.lookAt(0, 0, 0);
+
+// --- Desktop camera controls (non-VR) ---
+let desktopCamMode: DesktopCameraMode = 'top';
+let desktopZoom = 75;
+
+window.addEventListener('wheel', (ev) => {
+  // Don't affect page scroll in some browsers.
+  ev.preventDefault?.();
+  desktopZoom += Math.sign(ev.deltaY) * 6;
+  desktopZoom = Math.max(30, Math.min(140, desktopZoom));
+}, { passive: false });
+
+window.addEventListener('keydown', (ev) => {
+  if (ev.key.toLowerCase() === 'c') {
+    desktopCamMode = desktopCamMode === 'top' ? 'chase' : 'top';
+  }
+});
 
 // Lights
 const sun = new THREE.DirectionalLight(0xffffff, 2.0);
@@ -71,6 +90,14 @@ const tabletop = new TabletopRig();
 scene.add(tabletop.root);
 const arena = createArena();
 tabletop.root.add(arena);
+
+// Switch between desktop 1:1 world and VR tabletop diorama.
+renderer.xr.addEventListener('sessionstart', () => {
+  tabletop.setTabletopMode();
+});
+renderer.xr.addEventListener('sessionend', () => {
+  tabletop.setDesktopMode();
+});
 
 // Particles
 const particles = new ParticleSystem(2600);
@@ -519,12 +546,13 @@ function step(now: number) {
     updateHUD();
   }
 
-  // follow camera in desktop (nice chase-ish top down)
+  // Desktop camera: playable view with toggleable top/chase mode + mouse wheel zoom.
   if (player && !renderer.xr.isPresenting) {
     const px = player.car.position.x;
     const pz = player.car.position.y;
-    camera.position.lerp(new THREE.Vector3(px, 42, pz + 58), 0.08);
-    camera.lookAt(px, 0, pz);
+    const { position, target } = computeDesktopCamera(px, pz, player.car.heading, desktopCamMode, desktopZoom);
+    camera.position.lerp(position, desktopCamMode === 'top' ? 0.12 : 0.14);
+    camera.lookAt(target);
   }
 
   // render

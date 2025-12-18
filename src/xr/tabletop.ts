@@ -6,7 +6,32 @@ export class TabletopRig {
   private height = 1.05;
   private center = new THREE.Vector3(0, 0, 0);
 
+  private desktopScale = 1.0;
+  private desktopHeight = 0.0;
+  private tabletopScale = 0.12;
+  private tabletopHeight = 1.05;
+
   constructor() {
+    // Start in desktop mode; VR session start will switch to tabletop mode.
+    this.setDesktopMode();
+    this.apply();
+  }
+
+  /**
+   * Desktop mode renders the arena at 1:1 scale in world space.
+   */
+  setDesktopMode() {
+    this.scale = this.desktopScale;
+    this.height = this.desktopHeight;
+    this.apply();
+  }
+
+  /**
+   * Tabletop mode is used for VR: scaled down diorama floating in front of the user.
+   */
+  setTabletopMode() {
+    this.scale = this.tabletopScale;
+    this.height = this.tabletopHeight;
     this.apply();
   }
 
