@@ -3,10 +3,11 @@
 This is a **runnable** browser game prototype inspired by Death Rally:
 
 - Single arena (walls + obstacles)
-- Player vehicle selection (sports / muscle / tank / buggy)
+- Player vehicle selection (sports / muscle / tank / buggy / **helicopter**)
 - Enemies + non-hostile onlookers
 - Pickups (health, ammo, shield, score, weapon)
 - 6 weapons: Machine Gun, Shotgun, Mines, Rocket, EMP, Homing Missiles
+- Helicopter-only: **Minigun + Airstrike**
 - Target cycling + lock-on UI for homing missiles
 - Postprocessing bloom + particles (explosions, trails)
 - **WebXR VR tabletop mode** (HTC Vive Pro compatible)
@@ -52,14 +53,27 @@ npm run dev
 ## Desktop controls
 
 - **WASD / Arrow keys**: drive
-- **Space**: machine gun
-- **Shift**: drop mine
+- **Space**: primary fire (MG / Minigun)
+- **Shift**: drop mine (ground vehicles)
 - **Tab**: cycle target
 - **F**: fire homing missile (requires lock)
-- **Q**: rocket
+- **Q**: rocket (ground vehicles) / airstrike (helicopter)
 - **E**: EMP
-- **1-4**: switch vehicle (sports/muscle/tank/buggy)
+- **Helicopter** is invulnerable (cannot be shot down) and hovers above the arena.
+- Use the **Vehicle** dropdown in the UI to select a vehicle before pressing Start.
 - **R**: reset (respawn player)
+
+## In-game UI toggles
+
+- **Start HP slider** (up to 1000)
+- **Freeze enemies** (stop movement)
+- **Stop attacks** (enemies keep moving but don't fire)
+- **Enemy helicopters** (spawn/disable)
+- **Slow motion** toggle
+
+## Minimap
+
+A small minimap is rendered in the bottom-left in non-VR mode.
 
 ## Tests
 
