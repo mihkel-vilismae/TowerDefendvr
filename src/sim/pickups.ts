@@ -23,6 +23,14 @@ export abstract class Pickup {
     this.type = type;
     this.radius = radius;
   }
+
+  /**
+   * Convenience accessor for render/UI layers. Some parts of the app expect a
+   * `position` object with `{x,y}` fields.
+   */
+  get position(): { x: number; y: number } {
+    return { x: this.x, y: this.y };
+  }
   /** returns true if entity is within pickup radius */
   collides(entity: Entity): boolean {
     const dx = entity.car.position.x - this.x;
