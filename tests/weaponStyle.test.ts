@@ -4,7 +4,9 @@ import { WEAPON_VFX } from '../src/render/weaponStyle';
 describe('WEAPON_VFX palette', () => {
   it('defines styles for all weapon keys used by the game', () => {
     const keys = Object.keys(WEAPON_VFX).sort();
-    expect(keys).toEqual([
+    // Keep this assertion order-independent to avoid subtle lexicographic pitfalls
+    // (e.g., 'mine' sorts before 'minigun').
+    const expected = [
       'airstrike',
       'emp',
       'machinegun',
@@ -13,7 +15,8 @@ describe('WEAPON_VFX palette', () => {
       'missile',
       'rocket',
       'shotgun',
-    ]);
+    ].sort();
+    expect(keys).toEqual(expected);
   });
 
   it('has sensible tracer point counts for tracer-based weapons', () => {
