@@ -14,7 +14,7 @@ import { TargetingSystem } from './sim/targeting';
 import { createArena, createVehicleMesh, VehicleVisualType } from './render/models';
 import { ParticleSystem } from './render/particles';
 import { ReplayBuffer } from './game/replay';
-import { computeDesktopCamera, DesktopCameraMode } from './render/cameraMath';
+import { computeDesktopCamera, DesktopCameraMode, cycleDesktopCameraMode } from './render/cameraMath';
 import { TabletopRig } from './xr/tabletop';
 import { checkedOr, onChange, requireEl } from './ui/safeDom';
 import { RaceTracker } from './sim/race';
@@ -80,7 +80,7 @@ window.addEventListener('wheel', (ev) => {
 
 window.addEventListener('keydown', (ev) => {
   if (ev.key.toLowerCase() === 'c') {
-    desktopCamMode = desktopCamMode === 'top' ? 'chase' : 'top';
+    desktopCamMode = cycleDesktopCameraMode(desktopCamMode);
   }
 });
 
@@ -970,7 +970,7 @@ function step(now: number) {
     if (!renderer.xr.isPresenting) {
       const px = player.car.position.x;
       const pz = player.car.position.y;
-      const { position, target } = computeDesktopCamera(px, pz, player.car.heading, 'chase', desktopZoom);
+      const { position, target } = computeDesktopCamera(px, pz, player.car.heading, desktopCamMode, desktopZoom);
       camera.position.lerp(position, 0.14);
       camera.lookAt(target);
     }
@@ -983,12 +983,15 @@ function step(now: number) {
     // Desktop input
     const isXR = renderer.xr.isPresenting;
     const vr = readVRStick();
-    const input = {
-      accelerate: isXR ? vr.throttle > 0.2 : (key('KeyW') || key('ArrowUp')),
-      brake: isXR ? vr.throttle < -0.2 : (key('KeyS') || key('ArrowDown')),
-      left: isXR ? vr.steer < -0.2 : (key('KeyA') || key('ArrowLeft')),
-      right: isXR ? vr.steer > 0.2 : (key('KeyD') || key('ArrowRight')),
-    };
+    let accelerate = isXR ? vr.throttle > 0.2 : (key('KeyW') || key('ArrowUp'));
+    let brake = isXR ? vr.throttle < -0.2 : (key('KeyS') || key('ArrowDown'));
+    const left = isXR ? vr.steer < -0.2 : (key('KeyA') || key('ArrowLeft'));
+    const right = isXR ? vr.steer > 0.2 : (key('KeyD') || key('ArrowRight'));
+
+    // If both are held, prefer forward (prevents jitter from canceling).
+    if (accelerate && brake) brake = false;
+
+    const input = { accelerate, brake, left, right };
 
     // One-shot actions
     if (key('Space')) fireMachineGun();
