@@ -22,6 +22,7 @@ import { RaceTracker } from './sim/race';
 import { Vector2 } from './game/vector2';
 import { WEAPON_VFX } from './render/weaponStyle';
 import { computeTargetHighlightVisual } from './render/targetHighlightMath';
+import { headingToYaw } from './render/headingToYaw';
 
 type VehicleChoice = 'sports' | 'muscle' | 'buggy' | 'tank' | 'heli';
 
@@ -209,10 +210,14 @@ renderer.xr.addEventListener('sessionend', () => {
 
 // Particles
 const particles = new ParticleSystem(2600);
-particles.setSize(14);
+// Smaller particle size to keep explosions readable.
+particles.setSize(9);
 const DEFAULT_PARTICLE_COLOR = 0xffc86b;
 particles.setColor(DEFAULT_PARTICLE_COLOR);
 tabletop.root.add(particles.points);
+
+// Global explosion intensity scale (visual only). Keep explosions compact.
+const EXPLOSION_INTENSITY_SCALE = 0.12;
 
 // Bullet/pellet tracers: clearly visible streaks for hitscan weapons.
 const tracers = new TracerRenderer(700);
@@ -614,7 +619,7 @@ function fireMachineGun() {
   spawnTracer(sx, sz, ex, ez, player.hovering ? 'minigun' : 'machinegun');
   // muzzle flash
   particles.setColor(player.hovering ? WEAPON_VFX.minigun.impactColor : WEAPON_VFX.machinegun.impactColor);
-  particles.spawnExplosion(new THREE.Vector3(sx, player.hovering ? 1.25 : 0.35, sz), 0.12);
+  particles.spawnExplosion(new THREE.Vector3(sx, player.hovering ? 1.25 : 0.35, sz), 0.12 * EXPLOSION_INTENSITY_SCALE);
   particles.setColor(DEFAULT_PARTICLE_COLOR);
 }
 
@@ -625,7 +630,7 @@ function dropMine() {
   mw.fire(sim.simTime, player);
   // drop flash
   particles.setColor(WEAPON_VFX.mine.impactColor);
-  particles.spawnExplosion(new THREE.Vector3(player.car.position.x, 0.25, player.car.position.y), 0.12);
+  particles.spawnExplosion(new THREE.Vector3(player.car.position.x, 0.25, player.car.position.y), 0.12 * EXPLOSION_INTENSITY_SCALE);
   particles.setColor(DEFAULT_PARTICLE_COLOR);
 }
 
@@ -672,7 +677,7 @@ function fireEMP() {
   emp.pulse(sim.simTime, [...sim.enemies, ...sim.onlookers]);
   // Visual pulse ring
   particles.setColor(WEAPON_VFX.emp.impactColor);
-  particles.spawnExplosion(new THREE.Vector3(player.car.position.x, 0.45, player.car.position.y), 0.55);
+  particles.spawnExplosion(new THREE.Vector3(player.car.position.x, 0.45, player.car.position.y), 0.55 * EXPLOSION_INTENSITY_SCALE);
   particles.setColor(DEFAULT_PARTICLE_COLOR);
 }
 
@@ -685,7 +690,7 @@ function fireAirstrike() {
   as.fire(sim.simTime, t);
   // marker pulse
   particles.setColor(WEAPON_VFX.airstrike.impactColor);
-  particles.spawnExplosion(new THREE.Vector3(t.car.position.x, 0.8, t.car.position.y), 0.35);
+  particles.spawnExplosion(new THREE.Vector3(t.car.position.x, 0.8, t.car.position.y), 0.35 * EXPLOSION_INTENSITY_SCALE);
   particles.setColor(DEFAULT_PARTICLE_COLOR);
 }
 
@@ -919,7 +924,7 @@ function syncEntityVisuals() {
   for (const e of [...visuals.keys()]) {
     if (!allEntities.includes(e) || (!e.alive && !(replayActive && e === player))) {
       // explosion VFX
-      particles.spawnExplosion(new THREE.Vector3(e.car.position.x, 0.45, e.car.position.y), 1.0);
+      particles.spawnExplosion(new THREE.Vector3(e.car.position.x, 0.45, e.car.position.y), 1.0 * EXPLOSION_INTENSITY_SCALE);
       removeVisual(e);
     }
   }
@@ -939,7 +944,7 @@ function syncEntityVisuals() {
   for (const [e, v] of visuals) {
     const y = e.hovering ? 1.25 : 0;
     v.position.set(e.car.position.x, y, e.car.position.y);
-    v.rotation.y = -e.car.heading;
+    v.rotation.y = headingToYaw(e.car.heading);
 
     // Helicopter rotors
     if (e.hovering) {

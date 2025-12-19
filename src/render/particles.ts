@@ -33,7 +33,8 @@ export class ParticleSystem {
       depthWrite: false,
       blending: THREE.AdditiveBlending,
       uniforms: {
-        uSize: { value: 10.0 },
+        // Smaller base size for readability (explosions were overwhelming the scene).
+        uSize: { value: 6.0 },
         uColor: { value: new THREE.Color(0xffffff) },
       },
       vertexShader: `
@@ -73,7 +74,8 @@ export class ParticleSystem {
   }
 
   spawnExplosion(center: THREE.Vector3, intensity = 1) {
-    const count = Math.min(160, Math.floor(80 + intensity * 120));
+    // Keep explosions compact; intensity still scales, but far less aggressively.
+    const count = Math.min(70, Math.floor(28 + intensity * 55));
     for (let i = 0; i < count; i++) {
       if (this.particles.length >= this.maxParticles) break;
       const dir = new THREE.Vector3(
@@ -81,7 +83,7 @@ export class ParticleSystem {
         (Math.random() - 0.5) * 0.25,
         (Math.random() - 0.5)
       ).normalize();
-      const speed = (6 + Math.random() * 18) * intensity;
+      const speed = (2.2 + Math.random() * 7.5) * intensity;
       const p: Particle = {
         pos: center.clone(),
         vel: dir.multiplyScalar(speed),
