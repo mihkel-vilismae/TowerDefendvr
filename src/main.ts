@@ -227,12 +227,13 @@ tabletop.root.add(tracers.lines);
 const projectileGroup = new THREE.Group();
 tabletop.root.add(projectileGroup);
 // Make each weapon visually distinct (projectile silhouettes + emissive palette)
-const missileGeo = new THREE.ConeGeometry(0.14, 0.62, 10);
+// Slightly larger missiles + brighter emissive to ensure they're visible in VR.
+const missileGeo = new THREE.ConeGeometry(0.18, 0.72, 12);
 const rocketGeo = new THREE.CylinderGeometry(0.12, 0.08, 0.55, 10);
 const missileMat = new THREE.MeshStandardMaterial({
   color: WEAPON_VFX.missile.projectileColor,
   emissive: WEAPON_VFX.missile.projectileColor,
-  emissiveIntensity: 1.35,
+  emissiveIntensity: 1.85,
   roughness: 0.25,
   metalness: 0.15,
 });
@@ -247,6 +248,120 @@ const missileMeshes: THREE.Mesh[] = [];
 const rocketMeshes: THREE.Mesh[] = [];
 const missilePrev: { x: number; y: number }[] = [];
 const rocketPrev: { x: number; y: number }[] = [];
+const missileWasAlive: boolean[] = [];
+const rocketWasAlive: boolean[] = [];
+
+// Missile/rocket exhaust "flame" so projectiles read clearly while moving.
+const exhaustGeo = new THREE.ConeGeometry(0.12, 0.35, 10);
+const missileExhaustMat = new THREE.MeshStandardMaterial({
+  color: WEAPON_VFX.missile.trailColor,
+  emissive: WEAPON_VFX.missile.trailColor,
+  emissiveIntensity: 2.2,
+  roughness: 0.2,
+  metalness: 0.05,
+  transparent: true,
+  opacity: 0.95,
+});
+const rocketExhaustMat = new THREE.MeshStandardMaterial({
+  color: WEAPON_VFX.rocket.trailColor,
+  emissive: WEAPON_VFX.rocket.trailColor,
+  emissiveIntensity: 1.75,
+  roughness: 0.25,
+  metalness: 0.05,
+  transparent: true,
+  opacity: 0.9,
+});
+const missileExhaustMeshes: THREE.Mesh[] = [];
+const rocketExhaustMeshes: THREE.Mesh[] = [];
+
+type DisintegratingVisual = {
+  obj: THREE.Object3D;
+  age: number;
+  dur: number;
+  mats: THREE.Material[];
+};
+
+// Keep a short-lived disintegration effect when an entity dies.
+const disintegrations = new Map<any, DisintegratingVisual>();
+
+function updateDisintegrations(dt: number) {
+  for (const [key, d] of disintegrations) {
+    d.age += dt;
+    const t = THREE.MathUtils.clamp(d.age / d.dur, 0, 1);
+    const fade = 1 - t;
+    // Fade and slightly shrink for a "disintegrate" feel.
+    d.obj.scale.setScalar(0.92 + fade * 0.08);
+    for (const m of d.mats) {
+      setMaterialFade(m, fade);
+      const anyM: any = m;
+      if (anyM.emissive && typeof anyM.emissiveIntensity === 'number') {
+        anyM.emissiveIntensity = Math.max(anyM.emissiveIntensity, 1.25) * fade;
+      }
+    }
+
+    if (t >= 1) {
+      disintegrations.delete(key);
+      // Caller removes the visual from the scene.
+    }
+  }
+}
+
+function cloneMaterialsForFade(root: THREE.Object3D): THREE.Material[] {
+  const mats: THREE.Material[] = [];
+  root.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    const m = mesh.material as any;
+    if (Array.isArray(m)) {
+      const cloned = m.map((mm: THREE.Material) => (mm ? mm.clone() : mm));
+      mesh.material = cloned as any;
+      for (const cm of cloned) if (cm) mats.push(cm);
+    } else if (m) {
+      const cm = (m as THREE.Material).clone();
+      mesh.material = cm as any;
+      mats.push(cm);
+    }
+  });
+  return mats;
+}
+
+function setMaterialFade(m: THREE.Material, alpha: number) {
+  const anyM = m as any;
+  if (typeof anyM.opacity === 'number') {
+    anyM.transparent = true;
+    anyM.opacity = THREE.MathUtils.clamp(alpha, 0, 1);
+  }
+}
+
+function spawnGreatExplosion(pos: THREE.Vector3, tint: number, intensity = 1.0) {
+  // Core fireball
+  particles.setColor(tint);
+  particles.spawnExplosion(pos, 1.2 * intensity * EXPLOSION_INTENSITY_SCALE);
+
+  // Hot white sparks
+  particles.setColor(0xffffff);
+  particles.spawnExplosion(pos.clone().add(new THREE.Vector3(0, 0.08, 0)), 0.75 * intensity * EXPLOSION_INTENSITY_SCALE);
+
+  // Radial streaks (readable in VR and on desktop)
+  const n = 10;
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2 + Math.random() * 0.25;
+    const r = 1.2 + Math.random() * 1.2;
+    const bx = pos.x + Math.cos(a) * r;
+    const bz = pos.z + Math.sin(a) * r;
+    tracers.add(pos.x, pos.y + 0.1, pos.z, bx, pos.y + 0.1, bz, tint, 0.22);
+  }
+
+  particles.setColor(DEFAULT_PARTICLE_COLOR);
+}
+
+function startDisintegration(key: any, obj: THREE.Object3D, pos: THREE.Vector3, tint: number) {
+  if (disintegrations.has(key)) return;
+  const mats = cloneMaterialsForFade(obj);
+  // A slightly longer effect feels satisfying.
+  disintegrations.set(key, { obj, mats, age: 0, dur: 0.85 });
+  spawnGreatExplosion(pos, tint, 1.25);
+}
 
 // Mine visuals (so all weapons have a 3D representation)
 const mineGroup = new THREE.Group();
@@ -617,9 +732,12 @@ function fireMachineGun() {
   const ez = target.car.position.y;
   mg.fire(sim.simTime, target);
   spawnTracer(sx, sz, ex, ez, player.hovering ? 'minigun' : 'machinegun');
-  // muzzle flash
+  // muzzle flash (keep it small; previous value was too "grenade-like")
   particles.setColor(player.hovering ? WEAPON_VFX.minigun.impactColor : WEAPON_VFX.machinegun.impactColor);
-  particles.spawnExplosion(new THREE.Vector3(sx, player.hovering ? 1.25 : 0.35, sz), 0.12 * EXPLOSION_INTENSITY_SCALE);
+  particles.spawnExplosion(
+    new THREE.Vector3(sx, player.hovering ? 1.25 : 0.35, sz),
+    (player.hovering ? 0.045 : 0.035) * EXPLOSION_INTENSITY_SCALE
+  );
   particles.setColor(DEFAULT_PARTICLE_COLOR);
 }
 
@@ -916,17 +1034,34 @@ function drawMinimap() {
   }
 }
 
-function syncEntityVisuals() {
+function syncEntityVisuals(dt: number) {
   if (!sim || !player) return;
 
-  // handle removals and explosions
+  // handle removals and death VFX (great explosion + disintegration)
   const allEntities = [player, ...sim.enemies, ...sim.onlookers];
   for (const e of [...visuals.keys()]) {
-    if (!allEntities.includes(e) || (!e.alive && !(replayActive && e === player))) {
-      // explosion VFX
-      particles.spawnExplosion(new THREE.Vector3(e.car.position.x, 0.45, e.car.position.y), 1.0 * EXPLOSION_INTENSITY_SCALE);
-      removeVisual(e);
+    const shouldRemove = !allEntities.includes(e) || (!e.alive && !(replayActive && e === player));
+    if (!shouldRemove) continue;
+
+    const v = visuals.get(e);
+    if (!v) continue;
+
+    // Start disintegration once, then keep the visual briefly while it fades out.
+    if (!disintegrations.has(e)) {
+      const y = e.hovering ? 1.25 : 0;
+      const pos = new THREE.Vector3(e.car.position.x, y + 0.45, e.car.position.y);
+      const tint = e.hovering ? WEAPON_VFX.minigun.impactColor : WEAPON_VFX.rocket.impactColor;
+      startDisintegration(e, v, pos, tint);
     }
+  }
+
+  // advance disintegration timers and remove finished visuals
+  updateDisintegrations(dt);
+  for (const e of [...visuals.keys()]) {
+    const shouldRemove = !allEntities.includes(e) || (!e.alive && !(replayActive && e === player));
+    if (!shouldRemove) continue;
+    if (disintegrations.has(e)) continue;
+    removeVisual(e);
   }
 
   // ensure visuals exist
@@ -987,15 +1122,30 @@ function updateParticlesFromProjectiles() {
       mesh.castShadow = true;
       projectileGroup.add(mesh);
       missileMeshes.push(mesh);
+      // Add a small exhaust flame as a child so the missile reads clearly in VR.
+      const flame = new THREE.Mesh(exhaustGeo, missileExhaustMat);
+      flame.position.set(0, -0.35, 0);
+      flame.rotation.x = Math.PI; // point backward
+      mesh.add(flame);
+      missileExhaustMeshes.push(flame);
       missilePrev.push({ x: 0, y: 0 });
+      missileWasAlive.push(false);
     }
     for (let i = 0; i < missileMeshes.length; i++) {
       const mesh = missileMeshes[i];
       const m = hm.missiles[i];
-      if (!m) {
+      const prevAlive = missileWasAlive[i] ?? false;
+      if (!m || !m.alive) {
+        // Spawn a satisfying detonation where the missile last was.
+        if (prevAlive) {
+          const prev = missilePrev[i];
+          if (prev) spawnGreatExplosion(new THREE.Vector3(prev.x, 0.95, prev.y), WEAPON_VFX.missile.impactColor, 1.1);
+        }
+        missileWasAlive[i] = false;
         mesh.visible = false;
         continue;
       }
+      missileWasAlive[i] = true;
       mesh.visible = true;
       mesh.position.set(m.position.x, 0.95, m.position.y);
       const prev = missilePrev[i] ?? (missilePrev[i] = { x: m.position.x, y: m.position.y });
@@ -1006,6 +1156,10 @@ function updateParticlesFromProjectiles() {
       // Point cone forward
       const ang = Math.atan2(m.direction.y, m.direction.x);
       mesh.rotation.y = -ang + Math.PI * 0.5;
+
+      // Exhaust pulse
+      const flame = missileExhaustMeshes[i];
+      if (flame) flame.scale.setScalar(0.8 + Math.sin(performance.now() * 0.04 + i) * 0.2);
       particles.setColor(WEAPON_VFX.missile.trailColor);
       particles.spawnTrailPoint(new THREE.Vector3(m.position.x, 0.85, m.position.y), new THREE.Vector3(0, 0.22, 0), 0.18);
       particles.setColor(DEFAULT_PARTICLE_COLOR);
@@ -1018,15 +1172,28 @@ function updateParticlesFromProjectiles() {
       mesh.castShadow = true;
       projectileGroup.add(mesh);
       rocketMeshes.push(mesh);
+      const flame = new THREE.Mesh(exhaustGeo, rocketExhaustMat);
+      flame.position.set(0, -0.3, 0);
+      flame.rotation.x = Math.PI;
+      mesh.add(flame);
+      rocketExhaustMeshes.push(flame);
       rocketPrev.push({ x: 0, y: 0 });
+      rocketWasAlive.push(false);
     }
     for (let i = 0; i < rocketMeshes.length; i++) {
       const mesh = rocketMeshes[i];
       const r = rw.rockets[i];
-      if (!r) {
+      const prevAlive = rocketWasAlive[i] ?? false;
+      if (!r || !r.alive) {
+        if (prevAlive) {
+          const prev = rocketPrev[i];
+          if (prev) spawnGreatExplosion(new THREE.Vector3(prev.x, 0.85, prev.y), WEAPON_VFX.rocket.impactColor, 1.0);
+        }
+        rocketWasAlive[i] = false;
         mesh.visible = false;
         continue;
       }
+      rocketWasAlive[i] = true;
       mesh.visible = true;
       mesh.position.set(r.position.x, 0.85, r.position.y);
       const prev = rocketPrev[i] ?? (rocketPrev[i] = { x: r.position.x, y: r.position.y });
@@ -1035,6 +1202,9 @@ function updateParticlesFromProjectiles() {
       prev.y = r.position.y;
       const ang = Math.atan2(r.direction.y, r.direction.x);
       mesh.rotation.y = -ang;
+
+      const flame = rocketExhaustMeshes[i];
+      if (flame) flame.scale.setScalar(0.75 + Math.sin(performance.now() * 0.05 + i) * 0.25);
       particles.setColor(WEAPON_VFX.rocket.trailColor);
       particles.spawnTrailPoint(new THREE.Vector3(r.position.x, 0.75, r.position.y), new THREE.Vector3(0, 0.12, 0), 0.18);
       particles.setColor(DEFAULT_PARTICLE_COLOR);
@@ -1104,7 +1274,7 @@ function step(now: number) {
 
     // advance visuals without sim
     syncPickupVisuals();
-    syncEntityVisuals();
+    syncEntityVisuals(dt);
     updateParticlesFromProjectiles();
     particles.update(dt);
     tracers.update(dt);
