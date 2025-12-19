@@ -13,6 +13,7 @@ import { GameSimulation, OnlookerKillRule, AirstrikeInstance } from './sim/game'
 import { TargetingSystem } from './sim/targeting';
 import { createArena, createVehicleMesh, VehicleVisualType } from './render/models';
 import { ParticleSystem } from './render/particles';
+import { TracerRenderer } from './render/tracers';
 import { ReplayBuffer } from './game/replay';
 import { computeDesktopCamera, DesktopCameraMode, cycleDesktopCameraMode } from './render/cameraMath';
 import { TabletopRig } from './xr/tabletop';
@@ -213,6 +214,10 @@ const DEFAULT_PARTICLE_COLOR = 0xffc86b;
 particles.setColor(DEFAULT_PARTICLE_COLOR);
 tabletop.root.add(particles.points);
 
+// Bullet/pellet tracers: clearly visible streaks for hitscan weapons.
+const tracers = new TracerRenderer(700);
+tabletop.root.add(tracers.lines);
+
 // Simple projectile meshes (so missiles/rockets are visible in-flight)
 const projectileGroup = new THREE.Group();
 tabletop.root.add(projectileGroup);
@@ -235,6 +240,8 @@ const rocketMat = new THREE.MeshStandardMaterial({
 });
 const missileMeshes: THREE.Mesh[] = [];
 const rocketMeshes: THREE.Mesh[] = [];
+const missilePrev: { x: number; y: number }[] = [];
+const rocketPrev: { x: number; y: number }[] = [];
 
 // Mine visuals (so all weapons have a 3D representation)
 const mineGroup = new THREE.Group();
@@ -582,23 +589,11 @@ function getWeapon<T>(cls: new (...args: any[]) => T): T | null {
 }
 
 function spawnTracer(startX: number, startY: number, endX: number, endY: number, key: keyof typeof WEAPON_VFX) {
-  // Spawn a dotted tracer line (hitscan / pellet burst).
+  // Render a short-lived line segment so bullets are clearly visible.
   const style = WEAPON_VFX[key];
-  const sx = startX;
-  const sz = startY;
-  const ex = endX;
-  const ez = endY;
-  const steps = Math.max(4, style.tracerPoints);
-  particles.setColor(style.tracerColor);
-  for (let i = 0; i <= steps; i++) {
-    const t = i / steps;
-    const x = sx + (ex - sx) * t;
-    const z = sz + (ez - sz) * t;
-    // slight height jitter so tracers feel "alive"
-    const y = 0.62 + Math.sin(i * 0.7) * 0.025;
-    particles.spawnTrailPoint(new THREE.Vector3(x, y, z), new THREE.Vector3(0, 0.1, 0), 0.11);
-  }
-  particles.setColor(DEFAULT_PARTICLE_COLOR);
+  const y = player?.hovering ? 1.35 : 0.62;
+  // Slight forward bias so the segment isn't hidden inside the vehicle mesh.
+  tracers.add(startX, y, startY, endX, y, endY, style.tracerColor, 0.09);
 }
 
 function fireMachineGun() {
@@ -698,6 +693,9 @@ function fireAirstrike() {
 function resetWorld() {
   replayActive = false;
   replayBuf.clear();
+  tracers.clear();
+  missilePrev.length = 0;
+  rocketPrev.length = 0;
   // Clear visuals
   for (const [ent] of visuals) removeVisual(ent);
   for (const o of pickupVisuals) tabletop.root.remove(o);
@@ -984,6 +982,7 @@ function updateParticlesFromProjectiles() {
       mesh.castShadow = true;
       projectileGroup.add(mesh);
       missileMeshes.push(mesh);
+      missilePrev.push({ x: 0, y: 0 });
     }
     for (let i = 0; i < missileMeshes.length; i++) {
       const mesh = missileMeshes[i];
@@ -994,6 +993,11 @@ function updateParticlesFromProjectiles() {
       }
       mesh.visible = true;
       mesh.position.set(m.position.x, 0.95, m.position.y);
+      const prev = missilePrev[i] ?? (missilePrev[i] = { x: m.position.x, y: m.position.y });
+      // visible trail segment (helps readability in non-VR)
+      tracers.add(prev.x, 0.92, prev.y, m.position.x, 0.92, m.position.y, WEAPON_VFX.missile.trailColor, 0.14);
+      prev.x = m.position.x;
+      prev.y = m.position.y;
       // Point cone forward
       const ang = Math.atan2(m.direction.y, m.direction.x);
       mesh.rotation.y = -ang + Math.PI * 0.5;
@@ -1009,6 +1013,7 @@ function updateParticlesFromProjectiles() {
       mesh.castShadow = true;
       projectileGroup.add(mesh);
       rocketMeshes.push(mesh);
+      rocketPrev.push({ x: 0, y: 0 });
     }
     for (let i = 0; i < rocketMeshes.length; i++) {
       const mesh = rocketMeshes[i];
@@ -1019,6 +1024,10 @@ function updateParticlesFromProjectiles() {
       }
       mesh.visible = true;
       mesh.position.set(r.position.x, 0.85, r.position.y);
+      const prev = rocketPrev[i] ?? (rocketPrev[i] = { x: r.position.x, y: r.position.y });
+      tracers.add(prev.x, 0.82, prev.y, r.position.x, 0.82, r.position.y, WEAPON_VFX.rocket.trailColor, 0.16);
+      prev.x = r.position.x;
+      prev.y = r.position.y;
       const ang = Math.atan2(r.direction.y, r.direction.x);
       mesh.rotation.y = -ang;
       particles.setColor(WEAPON_VFX.rocket.trailColor);
@@ -1093,6 +1102,7 @@ function step(now: number) {
     syncEntityVisuals();
     updateParticlesFromProjectiles();
     particles.update(dt);
+    tracers.update(dt);
     updateHUD();
     drawMinimap();
 
@@ -1206,6 +1216,7 @@ function step(now: number) {
     syncEntityVisuals();
     updateParticlesFromProjectiles();
     particles.update(dt);
+    tracers.update(dt);
     updateHUD();
     drawMinimap();
   }
