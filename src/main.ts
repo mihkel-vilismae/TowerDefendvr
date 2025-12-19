@@ -19,6 +19,8 @@ import { TabletopRig } from './xr/tabletop';
 import { checkedOr, onChange, requireEl } from './ui/safeDom';
 import { RaceTracker } from './sim/race';
 import { Vector2 } from './game/vector2';
+import { WEAPON_VFX } from './render/weaponStyle';
+import { computeTargetHighlightVisual } from './render/targetHighlightMath';
 
 type VehicleChoice = 'sports' | 'muscle' | 'buggy' | 'tank' | 'heli';
 
@@ -214,11 +216,62 @@ tabletop.root.add(particles.points);
 // Simple projectile meshes (so missiles/rockets are visible in-flight)
 const projectileGroup = new THREE.Group();
 tabletop.root.add(projectileGroup);
-const projectileSphere = new THREE.SphereGeometry(0.12, 10, 10);
-const missileMat = new THREE.MeshStandardMaterial({ color: 0x7cfffa, emissive: 0x7cfffa, emissiveIntensity: 1.2, roughness: 0.2, metalness: 0.1 });
-const rocketMat = new THREE.MeshStandardMaterial({ color: 0xffe5a2, emissive: 0xffc86b, emissiveIntensity: 0.8, roughness: 0.3, metalness: 0.2 });
+// Make each weapon visually distinct (projectile silhouettes + emissive palette)
+const missileGeo = new THREE.ConeGeometry(0.14, 0.62, 10);
+const rocketGeo = new THREE.CylinderGeometry(0.12, 0.08, 0.55, 10);
+const missileMat = new THREE.MeshStandardMaterial({
+  color: WEAPON_VFX.missile.projectileColor,
+  emissive: WEAPON_VFX.missile.projectileColor,
+  emissiveIntensity: 1.35,
+  roughness: 0.25,
+  metalness: 0.15,
+});
+const rocketMat = new THREE.MeshStandardMaterial({
+  color: WEAPON_VFX.rocket.projectileColor,
+  emissive: WEAPON_VFX.rocket.impactColor,
+  emissiveIntensity: 0.95,
+  roughness: 0.35,
+  metalness: 0.25,
+});
 const missileMeshes: THREE.Mesh[] = [];
 const rocketMeshes: THREE.Mesh[] = [];
+
+// Mine visuals (so all weapons have a 3D representation)
+const mineGroup = new THREE.Group();
+tabletop.root.add(mineGroup);
+const mineGeo = new THREE.IcosahedronGeometry(0.22, 0);
+const mineMat = new THREE.MeshStandardMaterial({
+  color: 0x1b1f2a,
+  emissive: WEAPON_VFX.mine.projectileColor,
+  emissiveIntensity: 1.0,
+  roughness: 0.55,
+  metalness: 0.2,
+});
+const mineArmedMat = new THREE.MeshStandardMaterial({
+  color: 0x1b1f2a,
+  emissive: WEAPON_VFX.mine.projectileColor,
+  emissiveIntensity: 1.55,
+  roughness: 0.45,
+  metalness: 0.25,
+});
+const mineMeshes: THREE.Mesh[] = [];
+
+// Target highlight ring (3D)
+const targetHighlight = new THREE.Mesh(
+  new THREE.TorusGeometry(1.05, 0.09, 10, 26),
+  new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    emissive: new THREE.Color(0xffffff),
+    emissiveIntensity: 1.2,
+    roughness: 0.35,
+    metalness: 0.05,
+    transparent: true,
+    opacity: 0.9,
+  })
+);
+targetHighlight.rotation.x = Math.PI * 0.5;
+targetHighlight.visible = false;
+tabletop.root.add(targetHighlight);
 
 // Postprocessing
 const composer = new EffectComposer(renderer);
@@ -239,12 +292,12 @@ onChange(slowmoToggle, () => {
 });
 
 // Start HP slider
-if (startHp && startHpLabel) {
+if (startHpSlider && startHpLabel) {
   const sync = () => {
-    startHpLabel.textContent = String(startHp.value);
+    startHpLabel.textContent = String(startHpSlider.value);
   };
   sync();
-  startHp.addEventListener('input', sync);
+  startHpSlider.addEventListener('input', sync);
 }
 
 // Controller models (nice touch)
@@ -528,19 +581,22 @@ function getWeapon<T>(cls: new (...args: any[]) => T): T | null {
   return null;
 }
 
-function spawnTracer(startX: number, startY: number, endX: number, endY: number, color: number) {
-  // spawn a dotted line of trail points
+function spawnTracer(startX: number, startY: number, endX: number, endY: number, key: keyof typeof WEAPON_VFX) {
+  // Spawn a dotted tracer line (hitscan / pellet burst).
+  const style = WEAPON_VFX[key];
   const sx = startX;
   const sz = startY;
   const ex = endX;
   const ez = endY;
-  const steps = 8;
-  particles.setColor(color);
+  const steps = Math.max(4, style.tracerPoints);
+  particles.setColor(style.tracerColor);
   for (let i = 0; i <= steps; i++) {
     const t = i / steps;
     const x = sx + (ex - sx) * t;
     const z = sz + (ez - sz) * t;
-    particles.spawnTrailPoint(new THREE.Vector3(x, 0.65, z), new THREE.Vector3(0, 0.08, 0), 0.12);
+    // slight height jitter so tracers feel "alive"
+    const y = 0.62 + Math.sin(i * 0.7) * 0.025;
+    particles.spawnTrailPoint(new THREE.Vector3(x, y, z), new THREE.Vector3(0, 0.1, 0), 0.11);
   }
   particles.setColor(DEFAULT_PARTICLE_COLOR);
 }
@@ -560,7 +616,11 @@ function fireMachineGun() {
   const ex = target.car.position.x;
   const ez = target.car.position.y;
   mg.fire(sim.simTime, target);
-  spawnTracer(sx, sz, ex, ez, player.hovering ? 0x7cfffa : 0xffe5a2);
+  spawnTracer(sx, sz, ex, ez, player.hovering ? 'minigun' : 'machinegun');
+  // muzzle flash
+  particles.setColor(player.hovering ? WEAPON_VFX.minigun.impactColor : WEAPON_VFX.machinegun.impactColor);
+  particles.spawnExplosion(new THREE.Vector3(sx, player.hovering ? 1.25 : 0.35, sz), 0.12);
+  particles.setColor(DEFAULT_PARTICLE_COLOR);
 }
 
 function dropMine() {
@@ -568,6 +628,10 @@ function dropMine() {
   const mw = getWeapon(MineWeapon);
   if (!mw) return;
   mw.fire(sim.simTime, player);
+  // drop flash
+  particles.setColor(WEAPON_VFX.mine.impactColor);
+  particles.spawnExplosion(new THREE.Vector3(player.car.position.x, 0.25, player.car.position.y), 0.12);
+  particles.setColor(DEFAULT_PARTICLE_COLOR);
 }
 
 function fireMissile() {
@@ -594,6 +658,16 @@ function fireShotgun() {
   const t = targeting?.getTarget() ?? (getTargetsSorted()[0] ?? null);
   if (!sg || !t) return;
   sg.fire(sim.simTime, t);
+  // pellet burst: multiple short tracers around the main direction
+  const sx = player.car.position.x;
+  const sz = player.car.position.y;
+  const ex = t.car.position.x;
+  const ez = t.car.position.y;
+  for (let i = 0; i < 4; i++) {
+    const ox = (Math.random() - 0.5) * 1.8;
+    const oz = (Math.random() - 0.5) * 1.8;
+    spawnTracer(sx, sz, ex + ox, ez + oz, 'shotgun');
+  }
 }
 
 function fireEMP() {
@@ -602,9 +676,9 @@ function fireEMP() {
   if (!emp) return;
   emp.pulse(sim.simTime, [...sim.enemies, ...sim.onlookers]);
   // Visual pulse ring
-  particles.setColor(0x4df3ff);
+  particles.setColor(WEAPON_VFX.emp.impactColor);
   particles.spawnExplosion(new THREE.Vector3(player.car.position.x, 0.45, player.car.position.y), 0.55);
-  particles.setColor(0xffc86b);
+  particles.setColor(DEFAULT_PARTICLE_COLOR);
 }
 
 function fireAirstrike() {
@@ -615,7 +689,7 @@ function fireAirstrike() {
   if (!t) return;
   as.fire(sim.simTime, t);
   // marker pulse
-  particles.setColor(0xff4df1);
+  particles.setColor(WEAPON_VFX.airstrike.impactColor);
   particles.spawnExplosion(new THREE.Vector3(t.car.position.x, 0.8, t.car.position.y), 0.35);
   particles.setColor(DEFAULT_PARTICLE_COLOR);
 }
@@ -652,7 +726,7 @@ function resetWorld() {
   }
 
   // Apply start HP slider (up to 1000)
-  const hp0 = Math.max(50, Math.min(1000, Number(startHp?.value ?? 160)));
+  const hp0 = Math.max(50, Math.min(1000, Number(startHpSlider?.value ?? 160)));
   player.maxHP = hp0;
   player.hp = hp0;
 
@@ -880,6 +954,24 @@ function syncEntityVisuals() {
       if (tail) tail.rotation.z = spin * 1.8;
     }
   }
+
+  // 3D target highlight
+  const tgt = targeting?.getTarget();
+  if (tgt && tgt.alive) {
+    const ty = tgt.hovering ? 1.25 : 0;
+    targetHighlight.position.set(tgt.car.position.x, ty + 0.06, tgt.car.position.y);
+    const mat = targetHighlight.material as THREE.MeshStandardMaterial;
+    const viz = computeTargetHighlightVisual({ lockProgress, locked, timeS: sim?.simTime ?? 0 });
+    targetHighlight.scale.setScalar(viz.scale);
+    mat.opacity = viz.opacity;
+    mat.emissiveIntensity = viz.emissiveIntensity;
+    const c = locked ? 0x7cfffa : 0xffffff;
+    mat.color.setHex(c);
+    mat.emissive.setHex(c);
+    targetHighlight.visible = true;
+  } else {
+    targetHighlight.visible = false;
+  }
 }
 
 function updateParticlesFromProjectiles() {
@@ -888,7 +980,7 @@ function updateParticlesFromProjectiles() {
   if (hm) {
     // ensure meshes
     while (missileMeshes.length < hm.missiles.length) {
-      const mesh = new THREE.Mesh(projectileSphere, missileMat);
+      const mesh = new THREE.Mesh(missileGeo, missileMat);
       mesh.castShadow = true;
       projectileGroup.add(mesh);
       missileMeshes.push(mesh);
@@ -902,13 +994,18 @@ function updateParticlesFromProjectiles() {
       }
       mesh.visible = true;
       mesh.position.set(m.position.x, 0.95, m.position.y);
+      // Point cone forward
+      const ang = Math.atan2(m.direction.y, m.direction.x);
+      mesh.rotation.y = -ang + Math.PI * 0.5;
+      particles.setColor(WEAPON_VFX.missile.trailColor);
       particles.spawnTrailPoint(new THREE.Vector3(m.position.x, 0.85, m.position.y), new THREE.Vector3(0, 0.22, 0), 0.18);
+      particles.setColor(DEFAULT_PARTICLE_COLOR);
     }
   }
   const rw = getWeapon(RocketWeapon);
   if (rw) {
     while (rocketMeshes.length < rw.rockets.length) {
-      const mesh = new THREE.Mesh(projectileSphere, rocketMat);
+      const mesh = new THREE.Mesh(rocketGeo, rocketMat);
       mesh.castShadow = true;
       projectileGroup.add(mesh);
       rocketMeshes.push(mesh);
@@ -922,13 +1019,50 @@ function updateParticlesFromProjectiles() {
       }
       mesh.visible = true;
       mesh.position.set(r.position.x, 0.85, r.position.y);
+      const ang = Math.atan2(r.direction.y, r.direction.x);
+      mesh.rotation.y = -ang;
+      particles.setColor(WEAPON_VFX.rocket.trailColor);
       particles.spawnTrailPoint(new THREE.Vector3(r.position.x, 0.75, r.position.y), new THREE.Vector3(0, 0.12, 0), 0.18);
+      particles.setColor(DEFAULT_PARTICLE_COLOR);
+    }
+  }
+
+  // Mine meshes (from all mine weapons in the world)
+  if (sim) {
+    const sources: Entity[] = [player, ...sim.enemies];
+    const mines: { x: number; z: number; armed: boolean }[] = [];
+    for (const ent of sources) {
+      for (const w of ent.weapons) {
+        if (w instanceof MineWeapon) {
+          for (const m of w.activeMines) {
+            mines.push({ x: m.position.x, z: m.position.y, armed: m.armed });
+          }
+        }
+      }
+    }
+    while (mineMeshes.length < mines.length) {
+      const mesh = new THREE.Mesh(mineGeo, mineMat);
+      mesh.castShadow = true;
+      mineGroup.add(mesh);
+      mineMeshes.push(mesh);
+    }
+    for (let i = 0; i < mineMeshes.length; i++) {
+      const mesh = mineMeshes[i];
+      const m = mines[i];
+      if (!m) {
+        mesh.visible = false;
+        continue;
+      }
+      mesh.visible = true;
+      mesh.position.set(m.x, 0.12, m.z);
+      mesh.rotation.y = performance.now() * 0.0015;
+      mesh.material = m.armed ? mineArmedMat : mineMat;
     }
   }
 
   // airstrike markers
   if (sim && sim.airstrikes.length > 0) {
-    particles.setColor(0xff4df1);
+    particles.setColor(WEAPON_VFX.airstrike.trailColor);
     for (const a of sim.airstrikes) {
       if (a.exploded) continue;
       const t = a.elapsed / Math.max(0.001, a.delay);
