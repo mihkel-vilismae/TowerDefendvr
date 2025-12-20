@@ -128,6 +128,35 @@ export class MachineGun extends WeaponBase {
 }
 
 /**
+ * Anti-materiel rifle (hitscan): very long range, high damage, slow fire.
+ *
+ * This is used by the human player. We keep it deterministic and simple:
+ * if target is within range, apply damage immediately.
+ */
+export class AntiMaterielRifle extends WeaponBase {
+  range: number;
+  damage: number;
+
+  constructor(owner: Entity, cooldown: number, ammo: number | null, range: number, damage: number) {
+    super(owner, cooldown, ammo);
+    this.range = range;
+    this.damage = damage;
+  }
+
+  fire(simTime: number, target: Entity): void {
+    if (!this.canFire(simTime)) return;
+    this.lastFireTime = simTime;
+    if (this.ammo !== null) this.ammo!--;
+    const dx = target.car.position.x - this.owner.car.position.x;
+    const dy = target.car.position.y - this.owner.car.position.y;
+    const distSq = dx * dx + dy * dy;
+    if (distSq <= this.range * this.range) {
+      target.takeDamage(this.damage);
+    }
+  }
+}
+
+/**
  * Shotgun weapon: fires multiple pellets in a cone.
  * We approximate by checking if target is within angle and range.
  */

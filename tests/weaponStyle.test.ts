@@ -8,6 +8,7 @@ describe('WEAPON_VFX palette', () => {
     // (e.g., 'mine' sorts before 'minigun').
     const expected = [
       'airstrike',
+      'antimateriel',
       'emp',
       'machinegun',
       'minigun',

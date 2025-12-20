@@ -5,6 +5,10 @@ type Particle = {
   vel: THREE.Vector3;
   life: number;
   maxLife: number;
+  /** Per-particle drag multiplier applied each tick (e.g. 0.92). */
+  drag: number;
+  /** Gravity scale factor (0 = no gravity). */
+  gravityScale: number;
 };
 
 /**
@@ -20,7 +24,15 @@ export class ParticleSystem {
   private readonly material: THREE.ShaderMaterial;
   readonly points: THREE.Points;
 
-  constructor(maxParticles = 2000) {
+  constructor(
+    maxParticles = 2000,
+    opts: {
+      blending?: THREE.Blending;
+      depthWrite?: boolean;
+      sizePx?: number;
+      color?: THREE.ColorRepresentation;
+    } = {}
+  ) {
     this.maxParticles = maxParticles;
     this.positions = new Float32Array(maxParticles * 3);
     this.alphas = new Float32Array(maxParticles);
@@ -30,12 +42,12 @@ export class ParticleSystem {
 
     this.material = new THREE.ShaderMaterial({
       transparent: true,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
+      depthWrite: opts.depthWrite ?? false,
+      blending: opts.blending ?? THREE.AdditiveBlending,
       uniforms: {
         // Smaller base size for readability (explosions were overwhelming the scene).
-        uSize: { value: 6.0 },
-        uColor: { value: new THREE.Color(0xffffff) },
+        uSize: { value: opts.sizePx ?? 6.0 },
+        uColor: { value: new THREE.Color(opts.color ?? 0xffffff) },
       },
       vertexShader: `
         attribute float aAlpha;
@@ -89,14 +101,72 @@ export class ParticleSystem {
         vel: dir.multiplyScalar(speed),
         life: 0,
         maxLife: 0.6 + Math.random() * 0.6,
+        drag: 0.92,
+        gravityScale: 0.25,
       };
       this.particles.push(p);
     }
   }
 
+  /**
+   * Short-lived, fast sparks for impacts.
+   * Use an additive system with a small point size for best readability.
+   */
+  spawnSparks(center: THREE.Vector3, intensity = 1) {
+    const count = Math.min(90, Math.floor(18 + intensity * 70));
+    for (let i = 0; i < count; i++) {
+      if (this.particles.length >= this.maxParticles) break;
+      const dir = new THREE.Vector3(
+        (Math.random() - 0.5),
+        (Math.random() - 0.1),
+        (Math.random() - 0.5)
+      ).normalize();
+      const speed = (6 + Math.random() * 12) * intensity;
+      this.particles.push({
+        pos: center.clone(),
+        vel: dir.multiplyScalar(speed),
+        life: 0,
+        maxLife: 0.18 + Math.random() * 0.22,
+        drag: 0.86,
+        gravityScale: 1.35,
+      });
+    }
+  }
+
+  /**
+   * Longer-lived smoke. Best used with NormalBlending and larger point size.
+   */
+  spawnSmoke(center: THREE.Vector3, intensity = 1) {
+    const count = Math.min(55, Math.floor(8 + intensity * 40));
+    for (let i = 0; i < count; i++) {
+      if (this.particles.length >= this.maxParticles) break;
+      const dir = new THREE.Vector3(
+        (Math.random() - 0.5) * 0.6,
+        1.0 + Math.random() * 0.6,
+        (Math.random() - 0.5) * 0.6
+      ).normalize();
+      const speed = (0.6 + Math.random() * 1.4) * intensity;
+      this.particles.push({
+        pos: center.clone(),
+        vel: dir.multiplyScalar(speed),
+        life: 0,
+        maxLife: 1.4 + Math.random() * 1.6,
+        drag: 0.97,
+        gravityScale: 0.05,
+      });
+    }
+  }
+
   spawnTrailPoint(pos: THREE.Vector3, vel: THREE.Vector3, life = 0.25) {
     if (this.particles.length >= this.maxParticles) return;
-    this.particles.push({ pos: pos.clone(), vel: vel.clone(), life: 0, maxLife: life });
+    this.particles.push({
+      pos: pos.clone(),
+      vel: vel.clone(),
+      life: 0,
+      maxLife: life,
+      drag: 0.94,
+      gravityScale: 0.0,
+    });
   }
 
   update(dt: number) {
@@ -109,8 +179,8 @@ export class ParticleSystem {
         continue;
       }
       // basic drag + gravity
-      p.vel.multiplyScalar(0.92);
-      p.vel.y -= 9.81 * dt * 0.25;
+      p.vel.multiplyScalar(p.drag);
+      p.vel.y -= 9.81 * dt * p.gravityScale;
       p.pos.addScaledVector(p.vel, dt);
     }
 

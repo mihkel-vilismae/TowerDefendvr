@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 
-export type VehicleVisualType = 'sports' | 'muscle' | 'tank' | 'buggy' | 'heli' | 'enemy' | 'enemyHeli' | 'onlooker';
+export type VehicleVisualType = 'sports' | 'muscle' | 'tank' | 'buggy' | 'heli' | 'human' | 'enemy' | 'enemyHeli' | 'onlooker';
 
 function makeMat(color: THREE.ColorRepresentation, metalness = 0.2, roughness = 0.55, emissive?: THREE.ColorRepresentation) {
   const m = new THREE.MeshStandardMaterial({ color, metalness, roughness });
@@ -28,6 +28,30 @@ export function createVehicleMesh(type: VehicleVisualType): THREE.Object3D {
     const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.18, 0.35, 4, 8), makeMat(0xb9c1d9, 0.0, 0.8));
     body.position.y = 0.45;
     g.add(body);
+    shadow(g);
+    return g;
+  }
+
+  if (type === 'human') {
+    // A simple stylized human with a visible weapon silhouette.
+    const bodyMat = makeMat(0xd6d9e6, 0.0, 0.85);
+    const headMat = makeMat(0x2a2f3d, 0.1, 0.65, 0x4df3ff);
+    const weaponMat = makeMat(0x1b1f2a, 0.25, 0.55, 0xffc86b);
+    const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.22, 0.46, 4, 10), bodyMat);
+    body.position.y = 0.62;
+    g.add(body);
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.16, 16, 12), headMat);
+    head.position.y = 0.98;
+    g.add(head);
+    // rifle / bazooka silhouette (one combined)
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.9, 10), weaponMat);
+    barrel.rotation.z = Math.PI * 0.5;
+    barrel.position.set(0.35, 0.72, 0.12);
+    g.add(barrel);
+    const tube = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.55, 12), weaponMat);
+    tube.rotation.z = Math.PI * 0.5;
+    tube.position.set(0.28, 0.68, -0.05);
+    g.add(tube);
     shadow(g);
     return g;
   }
@@ -184,6 +208,13 @@ export function createArena(): THREE.Object3D {
   for (let i = 0; i < 22; i++) {
     const box = new THREE.Mesh(new THREE.BoxGeometry(1.8 + Math.random() * 2.2, 1.2 + Math.random() * 1.6, 1.8 + Math.random() * 2.2), obsMat);
     box.position.set((Math.random() - 0.5) * 80, box.geometry.parameters.height / 2, (Math.random() - 0.5) * 80);
+    // Treat obstacles as "buildings" for the human rooftop system.
+    box.userData.isBuilding = true;
+    box.userData.roofY = box.position.y + (box.geometry as any).parameters.height / 2;
+    box.userData.halfExtents = {
+      x: (box.geometry as any).parameters.width / 2,
+      z: (box.geometry as any).parameters.depth / 2,
+    };
     box.castShadow = true;
     box.receiveShadow = true;
     root.add(box);

@@ -7,7 +7,7 @@ import { XRControllerModelFactory } from 'three/examples/jsm/webxr/XRControllerM
 
 import { Car } from './game/car';
 import { Entity, Enemy, Onlooker } from './sim/entities';
-import { MachineGun, MineWeapon, HomingMissileWeapon, RocketWeapon, Shotgun, EMPWeapon, Minigun, AirstrikeWeapon } from './sim/weapons';
+import { MachineGun, AntiMaterielRifle, MineWeapon, HomingMissileWeapon, RocketWeapon, Shotgun, EMPWeapon, Minigun, AirstrikeWeapon } from './sim/weapons';
 import { HealthPickup, AmmoPickup, ShieldPickup, ScorePickup, WeaponPickup } from './sim/pickups';
 import { GameSimulation, OnlookerKillRule, AirstrikeInstance } from './sim/game';
 import { TargetingSystem } from './sim/targeting';
@@ -24,7 +24,7 @@ import { WEAPON_VFX } from './render/weaponStyle';
 import { computeTargetHighlightVisual } from './render/targetHighlightMath';
 import { headingToYaw } from './render/headingToYaw';
 
-type VehicleChoice = 'sports' | 'muscle' | 'buggy' | 'tank' | 'heli';
+type VehicleChoice = 'sports' | 'muscle' | 'buggy' | 'tank' | 'heli' | 'human';
 
 const app = document.getElementById('app')!;
 const hud = document.getElementById('hud')!;
@@ -116,6 +116,9 @@ const tabletop = new TabletopRig();
 scene.add(tabletop.root);
 const arena = createArena();
 tabletop.root.add(arena);
+
+// Obstacles are tagged as buildings in createArena(). Used for the human "enter building" rooftop mechanic.
+const buildingMeshes: THREE.Mesh[] = arena.children.filter((c) => (c as any).userData?.isBuilding) as THREE.Mesh[];
 
 // --- Race track visuals + tracker (simple loop) ---
 type GameMode = 'arena' | 'race';
@@ -217,12 +220,31 @@ renderer.xr.addEventListener('sessionend', () => {
 });
 
 // Particles
-const particles = new ParticleSystem(2600);
-// Smaller particle size to keep explosions readable.
-particles.setSize(9);
+// Fire/explosion core (additive)
+const particles = new ParticleSystem(2600, {
+  blending: THREE.AdditiveBlending,
+  sizePx: 9,
+  color: 0xffc86b,
+});
 const DEFAULT_PARTICLE_COLOR = 0xffc86b;
-particles.setColor(DEFAULT_PARTICLE_COLOR);
 tabletop.root.add(particles.points);
+
+// Fast sparks for impacts (additive, smaller)
+const sparks = new ParticleSystem(2200, {
+  blending: THREE.AdditiveBlending,
+  sizePx: 5.5,
+  color: 0xffffff,
+});
+tabletop.root.add(sparks.points);
+
+// Smoke (normal blending so it reads as smoke instead of neon glow)
+const smoke = new ParticleSystem(2600, {
+  blending: THREE.NormalBlending,
+  depthWrite: false,
+  sizePx: 18,
+  color: 0x4e5a66,
+});
+tabletop.root.add(smoke.points);
 
 // Global explosion intensity scale (visual only). Keep explosions compact.
 const EXPLOSION_INTENSITY_SCALE = 0.12;
@@ -289,8 +311,97 @@ type DisintegratingVisual = {
   mats: THREE.Material[];
 };
 
+type DebrisPiece = {
+  mesh: THREE.Mesh;
+  vel: THREE.Vector3;
+  angVel: THREE.Vector3;
+  age: number;
+  dur: number;
+};
+
 // Keep a short-lived disintegration effect when an entity dies.
 const disintegrations = new Map<any, DisintegratingVisual>();
+
+// Debris: small physical-looking chunks that fly out of vehicles on destruction.
+const debrisGroup = new THREE.Group();
+tabletop.root.add(debrisGroup);
+const debrisPieces: DebrisPiece[] = [];
+const debrisGeo = new THREE.BoxGeometry(0.18, 0.12, 0.28);
+const debrisMat = new THREE.MeshStandardMaterial({
+  color: 0x2a2f3a,
+  roughness: 0.65,
+  metalness: 0.35,
+});
+
+function spawnDebris(pos: THREE.Vector3, count: number, tint?: number) {
+  for (let i = 0; i < count; i++) {
+    const mesh = new THREE.Mesh(debrisGeo, debrisMat.clone());
+    const m = mesh.material as THREE.MeshStandardMaterial;
+    if (typeof tint === 'number') {
+      // Give debris a subtle tint so it feels connected to the hit.
+      m.emissive = new THREE.Color(tint);
+      m.emissiveIntensity = 0.25;
+    }
+    mesh.position.copy(pos);
+    mesh.position.y += 0.25 + Math.random() * 0.35;
+    mesh.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
+    mesh.scale.setScalar(0.85 + Math.random() * 1.25);
+    debrisGroup.add(mesh);
+
+    const vel = new THREE.Vector3(
+      (Math.random() - 0.5) * 5.2,
+      3.2 + Math.random() * 4.8,
+      (Math.random() - 0.5) * 5.2
+    );
+    const angVel = new THREE.Vector3(
+      (Math.random() - 0.5) * 8,
+      (Math.random() - 0.5) * 10,
+      (Math.random() - 0.5) * 8
+    );
+    debrisPieces.push({ mesh, vel, angVel, age: 0, dur: 1.6 + Math.random() * 1.1 });
+  }
+}
+
+function updateDebris(dt: number) {
+  for (let i = debrisPieces.length - 1; i >= 0; i--) {
+    const d = debrisPieces[i];
+    d.age += dt;
+    if (d.age >= d.dur) {
+      d.mesh.removeFromParent();
+      (d.mesh.material as THREE.Material).dispose?.();
+      debrisPieces.splice(i, 1);
+      continue;
+    }
+
+    // Integrate
+    d.vel.multiplyScalar(0.985);
+    d.vel.y -= 9.81 * dt * 0.75;
+    d.mesh.position.addScaledVector(d.vel, dt);
+    d.mesh.rotation.x += d.angVel.x * dt;
+    d.mesh.rotation.y += d.angVel.y * dt;
+    d.mesh.rotation.z += d.angVel.z * dt;
+
+    // Fake ground contact + skid
+    if (d.mesh.position.y < 0.06) {
+      d.mesh.position.y = 0.06;
+      d.vel.y = Math.abs(d.vel.y) * 0.35;
+      d.vel.x *= 0.7;
+      d.vel.z *= 0.7;
+    }
+
+    // Fade out near end
+    const t = THREE.MathUtils.clamp(d.age / d.dur, 0, 1);
+    const alpha = 1 - t;
+    const mat = d.mesh.material as any;
+    if (typeof mat.opacity === 'number') {
+      mat.transparent = true;
+      mat.opacity = alpha;
+    } else {
+      mat.transparent = true;
+      mat.opacity = alpha;
+    }
+  }
+}
 
 function updateDisintegrations(dt: number) {
   for (const [key, d] of disintegrations) {
@@ -347,8 +458,16 @@ function spawnGreatExplosion(pos: THREE.Vector3, tint: number, intensity = 1.0) 
   particles.spawnExplosion(pos, 1.2 * intensity * EXPLOSION_INTENSITY_SCALE);
 
   // Hot white sparks
+  sparks.setColor(0xffffff);
+  sparks.spawnSparks(pos.clone().add(new THREE.Vector3(0, 0.08, 0)), 1.25 * intensity);
+
+  // Secondary glowing burst (quick pop)
   particles.setColor(0xffffff);
-  particles.spawnExplosion(pos.clone().add(new THREE.Vector3(0, 0.08, 0)), 0.75 * intensity * EXPLOSION_INTENSITY_SCALE);
+  particles.spawnExplosion(pos.clone().add(new THREE.Vector3(0, 0.08, 0)), 0.55 * intensity * EXPLOSION_INTENSITY_SCALE);
+
+  // Smoke plume (lingers)
+  smoke.setColor(0x55606b);
+  smoke.spawnSmoke(pos.clone().add(new THREE.Vector3(0, 0.15, 0)), 0.45 * intensity);
 
   // Radial streaks (readable in VR and on desktop)
   const n = 10;
@@ -368,7 +487,12 @@ function startDisintegration(key: any, obj: THREE.Object3D, pos: THREE.Vector3, 
   const mats = cloneMaterialsForFade(obj);
   // A slightly longer effect feels satisfying.
   disintegrations.set(key, { obj, mats, age: 0, dur: 0.85 });
-  spawnGreatExplosion(pos, tint, 1.25);
+  // Big satisfying hit: fireball + sparks + smoke + debris chunks.
+  spawnGreatExplosion(pos, tint, 1.35);
+  spawnDebris(pos, 10 + Math.floor(Math.random() * 6), tint);
+  // Extra secondary sparks for "metal tearing" feel.
+  sparks.setColor(0xfff3c7);
+  sparks.spawnSparks(pos.clone().add(new THREE.Vector3(0, 0.12, 0)), 0.9);
 }
 
 // Mine visuals (so all weapons have a 3D representation)
@@ -464,6 +588,19 @@ const enemyHelis: Enemy[] = [];
 const visuals = new Map<Entity, THREE.Object3D>();
 const vehicleType = new Map<Entity, VehicleVisualType>();
 
+// Per-entity visual Y offsets (used for rooftop positioning, etc.).
+const entityYOffset = new Map<Entity, number>();
+
+// Low-cost "damaged vehicle" smoke timers. We spawn a few smoke puffs
+// per second depending on HP ratio.
+const smokeAcc = new Map<Entity, number>();
+
+function getEntityBaseY(ent: Entity): number {
+  // Helicopters are lifted to read well in tabletop VR; other entities use the map.
+  if (ent.hovering) return 1.25;
+  return entityYOffset.get(ent) ?? 0;
+}
+
 function makePlayer(choice: VehicleChoice): Entity {
   const car = new Car();
   // baseline tuning per vehicle
@@ -494,6 +631,16 @@ function makePlayer(choice: VehicleChoice): Entity {
     e.hovering = true;
     return e;
   }
+  if (choice === 'human') {
+    // Human: slower movement but tight turning. Invulnerable by request.
+    car.maxSpeed = 9;
+    car.accelerationRate = 18;
+    car.brakeDeceleration = 28;
+    car.turnRate = 3.6;
+    const e = new Entity(car, 9999);
+    e.invulnerable = true;
+    return e;
+  }
   // tank
   car.maxSpeed = 17;
   car.accelerationRate = 11;
@@ -522,6 +669,13 @@ function attachDefaultLoadout(ent: Entity, opts: { airstrikeSink?: { addAirstrik
   ent.weapons.push(new RocketWeapon(ent, 1.25, 10, 30, 2.8, 26));
   ent.weapons.push(new Shotgun(ent, 0.9, 18, 14, Math.PI / 2.8, 8, 18));
   ent.weapons.push(new EMPWeapon(ent, 6, 4, 15, 2.25, 0.55));
+}
+
+function attachHumanLoadout(ent: Entity) {
+  // Anti-materiel rifle: slow cadence, huge damage, long range.
+  ent.weapons.push(new AntiMaterielRifle(ent, 0.55, null, 120, 34));
+  // Bazooka: dumb rocket with a chunky explosion.
+  ent.weapons.push(new RocketWeapon(ent, 1.25, 18, 22, 3.4, 70));
 }
 
 function addVisual(ent: Entity, type: VehicleVisualType) {
@@ -683,6 +837,57 @@ function clampArena(ent: Entity) {
   ent.car.position.y = THREE.MathUtils.clamp(ent.car.position.y, -lim, lim);
 }
 
+// --- Human rooftop system ---
+let humanOnRoof = false;
+let humanBuilding: THREE.Mesh | null = null;
+let vrEnterRoofPrev = false;
+
+function nearestBuildingWithinRadius(x: number, z: number, radius: number): THREE.Mesh | null {
+  let best: THREE.Mesh | null = null;
+  let bestD2 = radius * radius;
+  for (const b of buildingMeshes) {
+    const dx = b.position.x - x;
+    const dz = b.position.z - z;
+    const d2 = dx * dx + dz * dz;
+    if (d2 < bestD2) {
+      bestD2 = d2;
+      best = b;
+    }
+  }
+  return best;
+}
+
+function setHumanRoofState(onRoof: boolean, building: THREE.Mesh | null) {
+  humanOnRoof = onRoof;
+  humanBuilding = building;
+  if (!player) return;
+  if (!onRoof || !building) {
+    entityYOffset.delete(player);
+    return;
+  }
+  const roofY = (building as any).userData?.roofY ?? (building.position.y + 1.0);
+  entityYOffset.set(player, roofY);
+}
+
+function tryEnterBuildingRoof() {
+  if (!player) return;
+  const b = nearestBuildingWithinRadius(player.car.position.x, player.car.position.y, 4.0);
+  if (!b) return;
+  // Teleport to roof center.
+  player.car.position.x = b.position.x;
+  player.car.position.y = b.position.z;
+  setHumanRoofState(true, b);
+}
+
+function stepHumanRoofConstraint() {
+  if (!player || !humanOnRoof || !humanBuilding) return;
+  const he = (humanBuilding as any).userData?.halfExtents as { x: number; z: number } | undefined;
+  if (!he) return;
+  const pad = 0.35;
+  player.car.position.x = THREE.MathUtils.clamp(player.car.position.x, humanBuilding.position.x - he.x + pad, humanBuilding.position.x + he.x - pad);
+  player.car.position.y = THREE.MathUtils.clamp(player.car.position.y, humanBuilding.position.z - he.z + pad, humanBuilding.position.z + he.z - pad);
+}
+
 // --- VR input ---
 function readVRStick(): { steer: number; throttle: number; } {
   const session = renderer.xr.getSession();
@@ -690,18 +895,36 @@ function readVRStick(): { steer: number; throttle: number; } {
   for (const src of session.inputSources) {
     const gp = src.gamepad;
     if (!gp) continue;
-    // Typical XR: axes[2], axes[3] is right stick, axes[0], axes[1] left stick; varies.
-    const axX = gp.axes[2] ?? gp.axes[0] ?? 0;
-    const axY = gp.axes[3] ?? gp.axes[1] ?? 0;
+    // Vive wands typically expose only 2 axes (trackpad), while many controllers
+    // expose 4 axes (2 sticks). Prefer 0/1 when only 2 are available.
+    const hasTwoAxes = gp.axes.length <= 2;
+    const axX = hasTwoAxes ? (gp.axes[0] ?? 0) : (gp.axes[2] ?? gp.axes[0] ?? 0);
+    const axY = hasTwoAxes ? (gp.axes[1] ?? 0) : (gp.axes[3] ?? gp.axes[1] ?? 0);
     return { steer: axX, throttle: -axY };
   }
   return { steer: 0, throttle: 0 };
 }
 
+function isVRButtonPressed(buttonIndex: number): boolean {
+  const session = renderer.xr.getSession();
+  if (!session) return false;
+  for (const src of session.inputSources) {
+    const gp = src.gamepad;
+    if (!gp) continue;
+    const b = gp.buttons[buttonIndex];
+    if (b?.pressed) return true;
+  }
+  return false;
+}
+
 // Trigger fires MG; squeeze drops mine; A/X fires missile if locked
 function hookXRButtons() {
   const onSelect = () => fireMachineGun();
-  const onSqueeze = () => dropMine();
+  const onSqueeze = () => {
+    // Human uses squeeze as bazooka; vehicles use squeeze as mine drop.
+    if (player && (vehicleSel.value as VehicleChoice) === 'human') fireBazooka();
+    else dropMine();
+  };
   c1.addEventListener('selectstart', onSelect);
   c1.addEventListener('squeezestart', onSqueeze);
   c2.addEventListener('selectstart', onSelect);
@@ -719,15 +942,16 @@ function getWeapon<T>(cls: new (...args: any[]) => T): T | null {
 function spawnTracer(startX: number, startY: number, endX: number, endY: number, key: keyof typeof WEAPON_VFX) {
   // Render a short-lived line segment so bullets are clearly visible.
   const style = WEAPON_VFX[key];
-  const y = player?.hovering ? 1.35 : 0.62;
+  const y = (player ? getEntityBaseY(player) : 0) + 0.62;
   // Slight forward bias so the segment isn't hidden inside the vehicle mesh.
   tracers.add(startX, y, startY, endX, y, endY, style.tracerColor, 0.09);
 }
 
 function fireMachineGun() {
   if (!sim || !player) return;
-  // Heli uses minigun; ground uses MG
-  const mg = (getWeapon(Minigun) as any) ?? (getWeapon(MachineGun) as any);
+  // Human uses anti-materiel rifle; heli uses minigun; ground uses MG
+  const am = getWeapon(AntiMaterielRifle) as any;
+  const mg = am ?? ((getWeapon(Minigun) as any) ?? (getWeapon(MachineGun) as any));
   if (!mg) return;
   const t = targeting?.getTarget();
   // Machine gun is hitscan; allow firing without target by picking nearest enemy in front
@@ -739,12 +963,13 @@ function fireMachineGun() {
   const ex = target.car.position.x;
   const ez = target.car.position.y;
   mg.fire(sim.simTime, target);
-  spawnTracer(sx, sz, ex, ez, player.hovering ? 'minigun' : 'machinegun');
+  const styleKey = am ? 'antimateriel' : (player.hovering ? 'minigun' : 'machinegun');
+  spawnTracer(sx, sz, ex, ez, styleKey as any);
   // muzzle flash (keep it small; previous value was too "grenade-like")
-  particles.setColor(player.hovering ? WEAPON_VFX.minigun.impactColor : WEAPON_VFX.machinegun.impactColor);
+  particles.setColor(am ? WEAPON_VFX.antimateriel.impactColor : (player.hovering ? WEAPON_VFX.minigun.impactColor : WEAPON_VFX.machinegun.impactColor));
   particles.spawnExplosion(
-    new THREE.Vector3(sx, player.hovering ? 1.25 : 0.35, sz),
-    (player.hovering ? 0.045 : 0.035) * EXPLOSION_INTENSITY_SCALE
+    new THREE.Vector3(sx, getEntityBaseY(player) + 0.35, sz),
+    (am ? 0.03 : (player.hovering ? 0.045 : 0.035)) * EXPLOSION_INTENSITY_SCALE
   );
   particles.setColor(DEFAULT_PARTICLE_COLOR);
 }
@@ -776,6 +1001,22 @@ function fireRocket() {
   const t = targeting?.getTarget() ?? (getTargetsSorted()[0] ?? null);
   if (!rw || !t) return;
   rw.fire(sim.simTime, t);
+}
+
+function fireBazooka() {
+  // Bazooka = RocketWeapon in human mode.
+  if (!sim || !player) return;
+  const rw = getWeapon(RocketWeapon);
+  const t = targeting?.getTarget() ?? (getTargetsSorted()[0] ?? null);
+  if (!rw || !t) return;
+  rw.fire(sim.simTime, t);
+  // compact muzzle pop so it reads but doesn't overwhelm
+  particles.setColor(WEAPON_VFX.rocket.impactColor);
+  particles.spawnExplosion(
+    new THREE.Vector3(player.car.position.x, getEntityBaseY(player) + 0.4, player.car.position.y),
+    0.055 * EXPLOSION_INTENSITY_SCALE
+  );
+  particles.setColor(DEFAULT_PARTICLE_COLOR);
 }
 
 function fireShotgun() {
@@ -834,6 +1075,8 @@ function resetWorld() {
 
   const choice = (vehicleSel.value as VehicleChoice) || 'sports';
   player = makePlayer(choice);
+  // reset rooftop state every restart
+  setHumanRoofState(false, null);
   // Respect mode selection.
   setGameMode(modeSel.value === 'race' ? 'race' : 'arena');
 
@@ -860,13 +1103,17 @@ function resetWorld() {
   player.hp = hp0;
 
   sim = new GameSimulation(player, { onlookerRule: OnlookerKillRule.ArcadeBonus });
-  attachDefaultLoadout(player, {
-    airstrikeSink: {
-      addAirstrike: (owner, x, y, delay, radius, damage) => {
-        sim?.addAirstrike(new AirstrikeInstance(owner, x, y, delay, radius, damage));
+  if (((vehicleSel.value as VehicleChoice) || 'sports') === 'human') {
+    attachHumanLoadout(player);
+  } else {
+    attachDefaultLoadout(player, {
+      airstrikeSink: {
+        addAirstrike: (owner, x, y, delay, radius, damage) => {
+          sim?.addAirstrike(new AirstrikeInstance(owner, x, y, delay, radius, damage));
+        },
       },
-    },
-  });
+    });
+  }
   targeting = new TargetingSystem();
 
   addVisual(player, choice);
@@ -1056,7 +1303,7 @@ function syncEntityVisuals(dt: number) {
 
     // Start disintegration once, then keep the visual briefly while it fades out.
     if (!disintegrations.has(e)) {
-      const y = e.hovering ? 1.25 : 0;
+      const y = getEntityBaseY(e);
       const pos = new THREE.Vector3(e.car.position.x, y + 0.45, e.car.position.y);
       const tint = e.hovering ? WEAPON_VFX.minigun.impactColor : WEAPON_VFX.rocket.impactColor;
       startDisintegration(e, v, pos, tint);
@@ -1085,9 +1332,44 @@ function syncEntityVisuals(dt: number) {
 
   // update transforms
   for (const [e, v] of visuals) {
-    const y = e.hovering ? 1.25 : 0;
+    const y = getEntityBaseY(e);
     v.position.set(e.car.position.x, y, e.car.position.y);
     v.rotation.y = headingToYaw(e.car.heading);
+
+    // --- Damage smoke ---
+    // Emits smoke from damaged (alive) non-hovering entities. Keeps it subtle
+    // at high HP, ramps up heavily below ~35%.
+    if (e.alive && !e.hovering) {
+      const hp01 = e.maxHP > 0 ? (e.hp / e.maxHP) : 1;
+      const dmg = 1 - THREE.MathUtils.clamp(hp01, 0, 1);
+      if (dmg > 0.22) {
+        const prev = smokeAcc.get(e) ?? 0;
+        const next = prev + dt;
+        smokeAcc.set(e, next);
+
+        // Spawn interval tightens as damage increases.
+        const interval = THREE.MathUtils.lerp(0.35, 0.10, THREE.MathUtils.clamp((dmg - 0.22) / 0.78, 0, 1));
+        if (next >= interval) {
+          smokeAcc.set(e, 0);
+          const sx = e.car.position.x + (Math.random() - 0.5) * 0.45;
+          const sz = e.car.position.y + (Math.random() - 0.5) * 0.45;
+          const sy = y + 0.55 + Math.random() * 0.18;
+          const vel = new THREE.Vector3(
+            (Math.random() - 0.5) * 0.25,
+            0.55 + Math.random() * 0.55,
+            (Math.random() - 0.5) * 0.25
+          );
+          // Use longer-lived trail points for continuous smoke.
+          smoke.spawnTrailPoint(new THREE.Vector3(sx, sy, sz), vel, 1.4 + Math.random() * 0.9);
+
+          // Occasional orange sparks at very low HP.
+          if (dmg > 0.65 && Math.random() < 0.35) {
+            sparks.setColor(0xffd59b);
+            sparks.spawnSparks(new THREE.Vector3(e.car.position.x, sy - 0.15, e.car.position.y), 0.45);
+          }
+        }
+      }
+    }
 
     // Helicopter rotors
     if (e.hovering) {
@@ -1104,7 +1386,7 @@ function syncEntityVisuals(dt: number) {
   // 3D target highlight
   const tgt = targeting?.getTarget();
   if (tgt && tgt.alive) {
-    const ty = tgt.hovering ? 1.25 : 0;
+    const ty = getEntityBaseY(tgt);
     targetHighlight.position.set(tgt.car.position.x, ty + 0.06, tgt.car.position.y);
     const mat = targetHighlight.material as THREE.MeshStandardMaterial;
     const viz = computeTargetHighlightVisual({ lockProgress, locked, timeS: sim?.simTime ?? 0 });
@@ -1285,6 +1567,9 @@ function step(now: number) {
     syncEntityVisuals(dt);
     updateParticlesFromProjectiles();
     particles.update(dt);
+    sparks.update(dt);
+    smoke.update(dt);
+    updateDebris(dt);
     tracers.update(dt);
     updateHUD();
     drawMinimap();
@@ -1321,15 +1606,29 @@ function step(now: number) {
     const input = { accelerate, brake, left, right };
 
     // One-shot actions
-    if (key('Space')) fireMachineGun();
-    if (key('ShiftLeft') || key('ShiftRight')) dropMine();
-    if (key('KeyF')) fireMissile();
-    if (key('KeyQ')) {
-      if (player.hovering) fireAirstrike();
-      else fireRocket();
+    const choice = (vehicleSel.value as VehicleChoice) || 'sports';
+    if (choice === 'human') {
+      if (key('Space')) fireMachineGun(); // anti-materiel
+      if (key('KeyQ')) fireBazooka();
+      if (key('KeyE')) {
+        keys.delete('KeyE');
+        tryEnterBuildingRoof();
+      }
+      // Vive wand: trackpad press commonly maps to button index 2 in WebXR gamepads.
+      const vrEnterNow = isXR && isVRButtonPressed(2);
+      if (vrEnterNow && !vrEnterRoofPrev) tryEnterBuildingRoof();
+      vrEnterRoofPrev = vrEnterNow;
+    } else {
+      if (key('Space')) fireMachineGun();
+      if (key('ShiftLeft') || key('ShiftRight')) dropMine();
+      if (key('KeyF')) fireMissile();
+      if (key('KeyQ')) {
+        if (player.hovering) fireAirstrike();
+        else fireRocket();
+      }
+      if (key('KeyR')) fireShotgun();
+      if (key('KeyE')) fireEMP();
     }
-    if (key('KeyR')) fireShotgun();
-    if (key('KeyE')) fireEMP();
 
     // target cycle
     if (key('Tab')) {
@@ -1350,6 +1649,7 @@ function step(now: number) {
       const prevPos = player.car.position.clone();
       player.car.update(effectiveDt, input);
       clampArena(player);
+      if (choice === 'human') stepHumanRoofConstraint();
       sim.update(fixedDt);
 
       // Race mode: checkpoints + finish line.
@@ -1396,9 +1696,12 @@ function step(now: number) {
   // visuals
   if (sim) {
     syncPickupVisuals();
-    syncEntityVisuals();
+    syncEntityVisuals(dt);
     updateParticlesFromProjectiles();
     particles.update(dt);
+    sparks.update(dt);
+    smoke.update(dt);
+    updateDebris(dt);
     tracers.update(dt);
     updateHUD();
     drawMinimap();

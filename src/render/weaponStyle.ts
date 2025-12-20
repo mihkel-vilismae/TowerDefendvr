@@ -1,5 +1,6 @@
 export type WeaponVfxKey =
   | 'machinegun'
+  | 'antimateriel'
   | 'minigun'
   | 'shotgun'
   | 'mine'
@@ -34,6 +35,14 @@ export const WEAPON_VFX: Record<WeaponVfxKey, WeaponVfxStyle> = {
     projectileColor: 0xfff0c8,
     impactColor: 0xffb86a,
     tracerPoints: 11,
+  },
+  antimateriel: {
+    // bright, high-energy white tracer that reads well in VR
+    tracerColor: 0xf6f8ff,
+    trailColor: 0xf6f8ff,
+    projectileColor: 0xf6f8ff,
+    impactColor: 0xffc86b,
+    tracerPoints: 19,
   },
   minigun: {
     tracerColor: 0x7cfffa,
