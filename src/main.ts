@@ -175,13 +175,11 @@ renderer.xr.addEventListener('sessionend', () => {
 // WebXR button
 // SteamVR (HTC Vive Pro) can throw NotSupportedError if we request unsupported features like "layers".
 // Keep the session init minimal and broadly compatible.
-document.body.appendChild(
-  VRButtonCompat.createButton(renderer, {
-    // local-floor gives a stable, seated/standing reference space.
-    // Keep it minimal to avoid SteamVR complaining about unsupported features (e.g. "layers").
-    optionalFeatures: ['local-floor'],
-  })
-);
+// NOTE: Do not pass optionalFeatures by default.
+// On some SteamVR/OpenXR builds (incl. Vive Pro setups), even optionalFeatures: ['local-floor']
+// can cause requestSession() to fail with "NotSupportedError: ... configuration is not supported".
+// We'll request the most compatible session init (empty) in VRButtonCompat.
+document.body.appendChild(VRButtonCompat.createButton(renderer));
 
 const scene = new THREE.Scene();
 scene.fog = new THREE.Fog(0x0b0d12, 25, 170);

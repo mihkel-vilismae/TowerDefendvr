@@ -39,11 +39,16 @@ export class VRButtonCompat {
       return button;
     }
 
-    // Conservative defaults: avoid 'layers' and other optional features.
-    // 'local-floor' yields stable standing/seated height.
+    // IMPORTANT (Vive Pro + some SteamVR/OpenXR builds):
+    // Even harmless-looking sessionInit fields (e.g. optionalFeatures: ['local-floor'])
+    // can cause requestSession() to fail with:
+    //   NotSupportedError: The specified session configuration is not supported.
+    // So we default to the MOST compatible init: no optional/required features.
+    // If you want floor-level reference later, request it via requestReferenceSpace
+    // with a graceful fallback (local-floor -> local).
     const baseInit: XRButtonSessionInit = {
       requiredFeatures: [],
-      optionalFeatures: ['local-floor'],
+      optionalFeatures: [],
       ...(sessionInit ?? {}),
     };
 
@@ -52,11 +57,11 @@ export class VRButtonCompat {
     baseInit.requiredFeatures = (baseInit.requiredFeatures ?? []).filter((f) => f !== 'layers');
     baseInit.optionalFeatures = (baseInit.optionalFeatures ?? []).filter((f) => f !== 'layers');
 
-    // Some SteamVR/OpenXR builds will still fail if *any* optionalFeatures are provided.
-    // We keep a retry init with absolutely no optional/required features.
+    // Secondary retry: try asking for a floor-aligned space if the runtime supports it.
+    // (This is less compatible than the empty init above on some systems, hence "fallback".)
     const fallbackInit: XRButtonSessionInit = {
       requiredFeatures: [],
-      optionalFeatures: [],
+      optionalFeatures: ['local-floor'],
     };
 
     let currentSession: XRSession | null = null;
@@ -90,7 +95,7 @@ export class VRButtonCompat {
         const session = await xr.requestSession('immersive-vr', baseInit);
         await onSessionStarted(session);
       } catch (err) {
-        // Retry with a fully empty init for runtimes that choke on optional features.
+        // Retry with local-floor in case the runtime wants it explicitly.
         try {
           const session = await xr.requestSession('immersive-vr', fallbackInit);
           await onSessionStarted(session);
