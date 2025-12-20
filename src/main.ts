@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
-import { VRButton } from 'three/examples/jsm/webxr/VRButton.js';
+import { VRButtonCompat } from './xr/VRButtonCompat';
 import { XRControllerModelFactory } from 'three/examples/jsm/webxr/XRControllerModelFactory.js';
 
 import { Car } from './game/car';
@@ -64,9 +64,9 @@ app.appendChild(renderer.domElement);
 // SteamVR (HTC Vive Pro) can throw NotSupportedError if we request unsupported features like "layers".
 // Keep the session init minimal and broadly compatible.
 document.body.appendChild(
-  VRButton.createButton(renderer, {
+  VRButtonCompat.createButton(renderer, {
     // local-floor gives a stable, seated/standing reference space.
-    // Avoid requesting experimental/optional features here (e.g. "layers") to improve compatibility.
+    // Keep it minimal to avoid SteamVR complaining about unsupported features (e.g. "layers").
     optionalFeatures: ['local-floor'],
   })
 );
