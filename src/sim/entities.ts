@@ -67,10 +67,10 @@ export class Enemy extends Entity {
   parkPos: Vector2 = new Vector2(0, 0);
   /** If true, enemy is currently in "attack" mode. */
   attacking: boolean = false;
-  /** Detection range in sim units. */
-  sightRange: number = 32;
-  /** Field of view (radians). */
-  fov: number = Math.PI * 0.55; // ~99°
+  /** Detection range in sim units. Increased so enemies react from farther away. */
+  sightRange: number = 60;
+  /** Field of view (radians). Broader FOV makes enemy AI feel more aware. */
+  fov: number = Math.PI * 0.8;
   /** If > simTime, enemy will keep attacking even if LOS drops briefly. */
   attackGraceUntil: number = 0;
 

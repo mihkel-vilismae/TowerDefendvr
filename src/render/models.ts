@@ -421,7 +421,9 @@ export function createArena(opts: ArenaOpts = {}): THREE.Object3D {
 
   // Floor/base ground
   const groundMat = new THREE.MeshStandardMaterial({ color: 0x101826, metalness: 0.0, roughness: 0.98 });
-  const floor = new THREE.Mesh(new THREE.PlaneGeometry(160, 160, 1, 1), groundMat);
+  // Expand the arena floor to allow more breathing room. Doubling both dimensions
+  // increases the playable space without changing world generation logic.
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(320, 320, 1, 1), groundMat);
   floor.rotation.x = -Math.PI * 0.5;
   floor.receiveShadow = true;
   root.add(floor);
@@ -435,7 +437,9 @@ export function createArena(opts: ArenaOpts = {}): THREE.Object3D {
     return m;
   };
 
-  const size = 55;
+  // Expand boundary walls to match the larger floor. Doubling the size keeps
+  // proportionate containment while allowing longer sight lines.
+  const size = 110;
   const h = 2.2;
   const thickness = 1.2;
   const w1 = makeWall(size * 2, h, thickness); w1.position.set(0, h / 2, size);

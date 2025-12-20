@@ -90,14 +90,11 @@ export class ParticleSystem {
     this.material.uniforms.uColor.value.set(color);
   }
 
-  setSpawnScale(scale01: number) {
-    // Clamp defensively.
-    this.spawnScale = Math.max(0, Math.min(1, scale01));
-  }
-
   /** Scale spawn counts (not maxParticles). */
   setSpawnScale(scale: number) {
+    // Clamp defensively.
     this.spawnScale = Math.max(0, Math.min(1, scale));
+    return this;
   }
 
   spawnExplosion(center: THREE.Vector3, intensity = 1) {

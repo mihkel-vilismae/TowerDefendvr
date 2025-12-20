@@ -25,6 +25,9 @@ import { WEAPON_VFX } from './render/weaponStyle';
 import { computeTargetHighlightVisual } from './render/targetHighlightMath';
 import { headingToYaw } from './render/headingToYaw';
 
+// Tower defence support: towers and wave management
+import { TowerDefense, Tower } from './sim/towerDefense';
+
 type VehicleChoice = 'sports' | 'muscle' | 'buggy' | 'tank' | 'heli' | 'human';
 
 const app = document.getElementById('app')!;
@@ -169,6 +172,9 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.xr.enabled = true;
+// Increase exposure to lift overall scene brightness. This works in tandem with
+// the brighter sun/hemisphere lights to produce a more vivid image.
+renderer.toneMappingExposure = 1.25;
 app.appendChild(renderer.domElement);
 
 // VR performance tuning: drop pixel ratio + particle spawn counts while in XR.
@@ -200,7 +206,9 @@ renderer.xr.addEventListener('sessionend', () => {
 document.body.appendChild(VRButtonCompat.createButton(renderer));
 
 const scene = new THREE.Scene();
-scene.fog = new THREE.Fog(0x0b0d12, 25, 170);
+// Brighten the atmosphere and push the fog farther out. A longer fog end distance
+// improves visibility now that the world is larger.
+scene.fog = new THREE.Fog(0x0b0d12, 25, 340);
 
 const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 900);
 // Desktop defaults: a closer view so the game is playable in regular browser mode.
@@ -225,8 +233,9 @@ window.addEventListener('keydown', (ev) => {
 });
 
 // Lights
-const sun = new THREE.DirectionalLight(0xffffff, 2.0);
-sun.position.set(60, 90, 40);
+// Stronger sunlight and a higher position makes the environment brighter and more dynamic.
+const sun = new THREE.DirectionalLight(0xffffff, 2.2);
+sun.position.set(100, 200, 100);
 sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
 sun.shadow.camera.near = 1;
@@ -237,7 +246,11 @@ sun.shadow.camera.top = 90;
 sun.shadow.camera.bottom = -90;
 scene.add(sun);
 
-scene.add(new THREE.AmbientLight(0x9db2ff, 0.35));
+// Replace ambient light with a hemisphere light for softer, more natural lighting. Set the intensity
+// higher to brighten shaded areas. The sky color is tinted slightly blue and the ground slightly
+// darker to help differentiate up/down cues.
+const hemiLight = new THREE.HemisphereLight(0xbfcfff, 0x1a2538, 1.25);
+scene.add(hemiLight);
 
 // Arena + tabletop root
 const tabletop = new TabletopRig();
@@ -245,6 +258,9 @@ scene.add(tabletop.root);
 
 let arena: THREE.Object3D | null = null;
 let buildingMeshes: THREE.Mesh[] = [];
+
+// Tower defence manager for the current simulation. Null when not in a game.
+let towerDef: TowerDefense | null = null;
 
 function rebuildArena(): void {
   if (arena) {
@@ -941,6 +957,10 @@ const pickupMesh = new THREE.Mesh(
 pickupMesh.castShadow = true;
 
 const pickupVisuals: THREE.Object3D[] = [];
+
+// Keep track of tower visuals so they can be cleaned up between resets. These
+// correspond 1:1 with towers managed by `towerDef`.
+const towerVisuals: THREE.Object3D[] = [];
 function syncPickupVisuals() {
   // remove old
   for (const o of pickupVisuals) tabletop.root.remove(o);
@@ -1003,7 +1023,11 @@ function getHeliTargetsSorted(): Entity[] {
 }
 
 function clampArena(ent: Entity) {
-  const lim = 53;
+  // Adjust the arena clamp to the larger world. When the world size was doubled, the
+  // playable bounds also needed to expand so the player doesn't collide with
+  // invisible walls prematurely. Walls now sit roughly at ±110 units, so use
+  // a slightly smaller value to keep the camera within the walls.
+  const lim = 106;
   ent.car.position.x = THREE.MathUtils.clamp(ent.car.position.x, -lim, lim);
   ent.car.position.y = THREE.MathUtils.clamp(ent.car.position.y, -lim, lim);
 }
@@ -1322,6 +1346,13 @@ function resetWorld() {
   for (const o of pickupVisuals) tabletop.root.remove(o);
   pickupVisuals.length = 0;
 
+  // Remove any existing tower visuals and reset tower defence manager when
+  // starting a new game. Without this cleanup, towers would accumulate after
+  // multiple restarts.
+  for (const o of towerVisuals) tabletop.root.remove(o);
+  towerVisuals.length = 0;
+  towerDef = null;
+
   const choice = (vehicleSel.value as VehicleChoice) || 'sports';
   player = makePlayer(choice);
   // reset rooftop state every restart
@@ -1368,15 +1399,52 @@ function resetWorld() {
   addVisual(player, choice);
   // In race mode we keep the chaos light so the track is readable.
   if (gameMode === 'race') {
-    spawnEnemies(3);
+    // Reduced enemy count for race mode. Fewer opponents makes races less chaotic and
+    // easier to follow, especially with the new larger world.
+    spawnEnemies(2);
     spawnOnlookers(6);
     for (let i = 0; i < 4; i++) spawnPickup();
     // Avoid infinite scaling mid-race.
     sim.enemySpawnCooldown = 9999;
   } else {
-    spawnEnemies(5);
-    spawnOnlookers(16);
+    // Arena/tower defence mode starts with fewer enemies to give towers time to act.
+    spawnEnemies(3);
+    spawnOnlookers(10);
     for (let i = 0; i < 6; i++) spawnPickup();
+  }
+
+  // Initialize tower defence only in non-race modes. Towers provide static
+  // automated defences that attack incoming waves of enemies. Towers are
+  // placed at fixed positions around the centre of the arena. Visuals are
+  // created here and stored in `towerVisuals` for cleanup on reset.
+  if (gameMode !== 'race') {
+    towerDef = new TowerDefense(sim);
+    // Tower positions chosen to roughly cover all approaches into the looped road.
+    const towerPositions: [number, number][] = [
+      [-35, -35], [35, -35], [-35, 35], [35, 35]
+    ];
+    for (const [tx, ty] of towerPositions) {
+      const tower = new Tower(tx, ty, 45, 0.8, 10);
+      towerDef.addTower(tower);
+      // Base: squat cylinder representing the turret housing
+      const baseGeo = new THREE.CylinderGeometry(0.6, 0.6, 1.4, 10);
+      const baseMat = new THREE.MeshStandardMaterial({ color: 0x353f5d, metalness: 0.2, roughness: 0.6 });
+      const base = new THREE.Mesh(baseGeo, baseMat);
+      base.position.set(tx, 0.7, ty);
+      base.castShadow = true;
+      base.receiveShadow = true;
+      // Barrel: emissive cylinder that hints at a muzzle. It points along +Z.
+      const barrelGeo = new THREE.CylinderGeometry(0.1, 0.1, 1.4, 8);
+      const barrelMat = new THREE.MeshStandardMaterial({ color: 0x4df3ff, emissive: 0x4df3ff, emissiveIntensity: 0.8, metalness: 0.2, roughness: 0.4 });
+      const barrel = new THREE.Mesh(barrelGeo, barrelMat);
+      barrel.rotation.x = Math.PI / 2;
+      barrel.position.set(tx, 1.2, ty + 0.7);
+      barrel.castShadow = true;
+      barrel.receiveShadow = true;
+      tabletop.root.add(base);
+      tabletop.root.add(barrel);
+      towerVisuals.push(base, barrel);
+    }
   }
 
   // Apply enemy helicopter toggle
@@ -1944,6 +2012,12 @@ if (!renderer.xr.isPresenting) {
       clampArena(player);
       if (choice === 'human') stepHumanRoofConstraint();
       sim.update(fixedDt);
+
+      // Tower defence update: towers fire on enemies and new waves spawn when
+      // the field is clear. Runs on fixed timesteps alongside the simulation.
+      if (towerDef) {
+        towerDef.update(sim.simTime);
+      }
 
       // Race mode: checkpoints + finish line.
       if (raceTracker && gameMode === 'race') {
