@@ -233,6 +233,7 @@ export class GameSimulation {
     car.position.x = (Math.random() - 0.5) * 50;
     car.position.y = (Math.random() - 0.5) * 50;
     const enemy = new Enemy(car, 50);
+    enemy.chooseRandomPark(80);
     // Give enemy basic MG and occasional mine
     enemy.weapons.push(new MachineGun(enemy, 0.5, null, 30, 5));
     enemy.weapons.push(new MineWeapon(enemy, 5, 5, 1, 5, 10));

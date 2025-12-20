@@ -63,7 +63,44 @@ export function applyEMP(simTime: number, target: Entity, duration: number, slow
  * Enemy entity. Enemies have simple AI: seek player and optionally attack.
  */
 export class Enemy extends Entity {
-  /** simplistic AI update: accelerate toward player and optionally fire weapons */
+  /** Where this enemy prefers to park/idle. */
+  parkPos: Vector2 = new Vector2(0, 0);
+  /** If true, enemy is currently in "attack" mode. */
+  attacking: boolean = false;
+  /** Detection range in sim units. */
+  sightRange: number = 32;
+  /** Field of view (radians). */
+  fov: number = Math.PI * 0.55; // ~99°
+  /** If > simTime, enemy will keep attacking even if LOS drops briefly. */
+  attackGraceUntil: number = 0;
+
+  /** Call after spawning to give this enemy a random idle destination. */
+  chooseRandomPark(areaRadius: number): void {
+    this.parkPos = new Vector2((Math.random() - 0.5) * areaRadius, (Math.random() - 0.5) * areaRadius);
+    // Start roughly facing randomly so parked enemies look natural.
+    this.car.heading = Math.random() * Math.PI * 2;
+  }
+
+  private angleDiff(a: number, b: number): number {
+    // returns signed smallest difference a-b in [-pi, pi]
+    let d = a - b;
+    while (d > Math.PI) d -= Math.PI * 2;
+    while (d < -Math.PI) d += Math.PI * 2;
+    return d;
+  }
+
+  private canSeePlayer(player: Entity): boolean {
+    const dx = player.car.position.x - this.car.position.x;
+    const dy = player.car.position.y - this.car.position.y;
+    const d2 = dx * dx + dy * dy;
+    if (d2 > this.sightRange * this.sightRange) return false;
+
+    const desired = Math.atan2(dy, dx);
+    const diff = Math.abs(this.angleDiff(desired, this.car.heading));
+    return diff <= this.fov * 0.5;
+  }
+
+  /** simplistic AI update: park/idle until the player is seen, then attack. */
   aiUpdate(
     simTime: number,
     dt: number,
@@ -73,28 +110,44 @@ export class Enemy extends Entity {
   ): void {
     const allowMove = opts.allowMove !== false;
     const allowAttack = opts.allowAttack !== false;
-    // Seek player: compute vector from enemy to player and accelerate toward it
-    const toPlayer = new Vector2(player.car.position.x - this.car.position.x,
-                                player.car.position.y - this.car.position.y);
-    // Determine if we should turn left or right based on cross product sign
-    const forward = Vector2.fromAngle(this.car.heading);
-    const cross = forward.x * toPlayer.y - forward.y * toPlayer.x;
+
+    // Acquire / maintain aggro
+    const sees = this.canSeePlayer(player);
+    if (sees) {
+      this.attacking = true;
+      this.attackGraceUntil = Math.max(this.attackGraceUntil, simTime + 1.2);
+    } else if (simTime > this.attackGraceUntil) {
+      this.attacking = false;
+    }
+
+    // Decide driving target: park position or player
+    const tx = this.attacking ? player.car.position.x : this.parkPos.x;
+    const ty = this.attacking ? player.car.position.y : this.parkPos.y;
+
+    const toTarget = new Vector2(tx - this.car.position.x, ty - this.car.position.y);
+    const dist = Math.sqrt(toTarget.x * toTarget.x + toTarget.y * toTarget.y);
+
+    // If parked and close, stop moving (looks like "parked in area")
+    const shouldMove = this.attacking ? (dist > 2.0) : (dist > 1.25);
+
+    const desiredHeading = Math.atan2(toTarget.y, toTarget.x);
+    const diff = this.angleDiff(desiredHeading, this.car.heading);
+
     const input = {
-      accelerate: true,
-      brake: false,
-      left: cross < 0,
-      right: cross > 0
+      accelerate: shouldMove,
+      brake: !shouldMove,
+      left: diff < -0.08,
+      right: diff > 0.08,
     };
-    // Drive the car
+
     if (allowMove) {
       this.car.update(dt, input);
     }
-    // Simple avoidance: if near any obstacle, turn away (not implemented due to time)
-    // Weapon usage: fire first available weapon if target in range
-    if (allowAttack && simTime >= this.weaponsDisabledUntil) {
+
+    // Weapon usage: fire first available weapon if target in range and in attack mode
+    if (this.attacking && allowAttack && simTime >= this.weaponsDisabledUntil) {
       for (const weapon of this.weapons) {
         if (weapon.autoFire && weapon.canFire(simTime)) {
-          // For AI, always choose player as target
           weapon.fire(simTime, player);
           break;
         }
@@ -102,6 +155,7 @@ export class Enemy extends Entity {
     }
   }
 }
+
 
 /**
  * Onlooker entity. They wander slowly or stand still.
