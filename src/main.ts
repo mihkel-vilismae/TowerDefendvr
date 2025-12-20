@@ -12,6 +12,7 @@ import { HealthPickup, AmmoPickup, ShieldPickup, ScorePickup, WeaponPickup } fro
 import { GameSimulation, OnlookerKillRule, AirstrikeInstance } from './sim/game';
 import { TargetingSystem } from './sim/targeting';
 import { createArena, createVehicleMesh, VehicleVisualType } from './render/models';
+import { DistrictPreset } from './render/worldConfig';
 import { ParticleSystem } from './render/particles';
 import { TracerRenderer } from './render/tracers';
 import { ReplayBuffer } from './game/replay';
@@ -140,6 +141,7 @@ const restartBtn = requireEl<HTMLButtonElement>('#btnRestart');
 const freezeEnemiesBtn = requireEl<HTMLButtonElement>('#btnFreezeEnemies');
 const stopAttacksBtn = requireEl<HTMLButtonElement>('#btnStopAttacks');
 const enterBuildingBtn = requireEl<HTMLButtonElement>('#btnEnterBuilding');
+const districtSel = requireEl<HTMLSelectElement>('#districtSel');
 const vehicleSel = requireEl<HTMLSelectElement>('#vehicleSel');
 const bloomToggle = el<HTMLInputElement>('#bloomToggle');
 const slowmoToggle = el<HTMLInputElement>('#slowmoToggle');
@@ -148,6 +150,14 @@ const modeSel = requireEl<HTMLSelectElement>('#modeSel');
 const lapsSel = requireEl<HTMLSelectElement>('#lapsSel');
 const startHpSlider = el<HTMLInputElement>('#startHp');
 const startHpLabel = el<HTMLSpanElement>('#startHpLabel');
+
+// District preset (world generation)
+const savedDistrict = (localStorage.getItem('deathrally.district') as DistrictPreset | null) ?? 'mixed';
+districtSel.value = savedDistrict;
+districtSel.addEventListener('change', () => {
+  localStorage.setItem('deathrally.district', districtSel.value);
+});
+
 // minimap is required for non-VR UX; fail early with a clear error if missing.
 const minimap = requireEl<HTMLCanvasElement>('#minimap');
 const vrHelp = requireEl<HTMLDivElement>('#vrHelp');
@@ -232,11 +242,24 @@ scene.add(new THREE.AmbientLight(0x9db2ff, 0.35));
 // Arena + tabletop root
 const tabletop = new TabletopRig();
 scene.add(tabletop.root);
-const arena = createArena();
-tabletop.root.add(arena);
 
-// Obstacles are tagged as buildings in createArena(). Used for the human "enter building" rooftop mechanic.
-const buildingMeshes: THREE.Mesh[] = arena.children.filter((c) => (c as any).userData?.isBuilding) as THREE.Mesh[];
+let arena: THREE.Object3D | null = null;
+let buildingMeshes: THREE.Mesh[] = [];
+
+function rebuildArena(): void {
+  if (arena) {
+    arena.removeFromParent();
+  }
+  const preset = (districtSel.value as DistrictPreset) ?? 'mixed';
+  // Seed is stable per rebuild so replays / debugging are consistent.
+  const seed = Math.floor(Math.random() * 1_000_000_000);
+  arena = createArena({ preset, seed });
+  tabletop.root.add(arena);
+  // Obstacles/buildings are tagged as buildings in createArena(). Used for the human rooftop mechanic.
+  buildingMeshes = arena.children.filter((c) => (c as any).userData?.isBuilding) as THREE.Mesh[];
+}
+
+rebuildArena();
 
 // --- Race track visuals + tracker (simple loop) ---
 type GameMode = 'arena' | 'race';
@@ -1287,6 +1310,8 @@ function fireAirstrike() {
 
 // --- Start / reset ---
 function resetWorld() {
+  // Apply selected district preset on each start/restart.
+  rebuildArena();
   replayActive = false;
   replayBuf.clear();
   tracers.clear();
