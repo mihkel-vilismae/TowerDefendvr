@@ -7,7 +7,7 @@ import { XRControllerModelFactory } from 'three/examples/jsm/webxr/XRControllerM
 
 import { Car } from './game/car';
 import { Entity, Enemy, Onlooker } from './sim/entities';
-import { MachineGun, AntiMaterielRifle, MineWeapon, HomingMissileWeapon, RocketWeapon, Shotgun, EMPWeapon, Minigun, AirstrikeWeapon } from './sim/weapons';
+import { MachineGun, AntiMaterielRifle, MineWeapon, HomingMissileWeapon, StingerWeapon, RocketWeapon, Shotgun, EMPWeapon, Minigun, AirstrikeWeapon } from './sim/weapons';
 import { HealthPickup, AmmoPickup, ShieldPickup, ScorePickup, WeaponPickup } from './sim/pickups';
 import { GameSimulation, OnlookerKillRule, AirstrikeInstance } from './sim/game';
 import { TargetingSystem } from './sim/targeting';
@@ -30,6 +30,98 @@ const app = document.getElementById('app')!;
 const hud = document.getElementById('hud')!;
 const panel = document.getElementById('panel')!;
 
+// Screen-space health bars for vehicles.
+const healthLayer = document.createElement('div');
+healthLayer.style.position = 'absolute';
+healthLayer.style.left = '0';
+healthLayer.style.top = '0';
+healthLayer.style.width = '100%';
+healthLayer.style.height = '100%';
+healthLayer.style.pointerEvents = 'none';
+healthLayer.style.zIndex = '8';
+app.appendChild(healthLayer);
+
+const healthBars = new Map<Entity, HTMLDivElement>();
+
+function ensureHealthBar(ent: Entity): HTMLDivElement {
+  let el = healthBars.get(ent);
+  if (el) return el;
+  el = document.createElement('div');
+  el.style.position = 'absolute';
+  el.style.width = '64px';
+  el.style.height = '6px';
+  el.style.borderRadius = '999px';
+  el.style.background = 'rgba(255,255,255,0.14)';
+  el.style.border = '1px solid rgba(255,255,255,0.14)';
+  el.style.boxShadow = '0 6px 14px rgba(0,0,0,0.35)';
+  const fill = document.createElement('div');
+  fill.style.height = '100%';
+  fill.style.width = '100%';
+  fill.style.borderRadius = '999px';
+  fill.style.background = 'rgba(120,255,160,0.85)';
+  fill.dataset['role'] = 'fill';
+  el.appendChild(fill);
+  healthLayer.appendChild(el);
+  healthBars.set(ent, el);
+  return el;
+}
+
+function removeHealthBar(ent: Entity): void {
+  const el = healthBars.get(ent);
+  if (!el) return;
+  el.remove();
+  healthBars.delete(ent);
+}
+
+function worldToScreen(pos: THREE.Vector3): { x: number; y: number; onScreen: boolean } {
+  const v = pos.clone().project(camera);
+  const onScreen = v.z >= -1 && v.z <= 1;
+  const x = (v.x * 0.5 + 0.5) * window.innerWidth;
+  const y = (-v.y * 0.5 + 0.5) * window.innerHeight;
+  return { x, y, onScreen };
+}
+
+function updateHealthBars(): void {
+  if (!sim) {
+    for (const [e] of healthBars) removeHealthBar(e);
+    return;
+  }
+  const ents = sim.enemies.filter(e => e.alive);
+  const alive = new Set<Entity>();
+  for (const e of ents) {
+    alive.add(e);
+    const bar = ensureHealthBar(e);
+    const fill = bar.querySelector('[data-role="fill"]') as HTMLDivElement | null;
+    const r = e.maxHP > 0 ? (e.hp / e.maxHP) : 0;
+    if (fill) {
+      fill.style.width = `${Math.max(0, Math.min(1, r)) * 100}%`;
+      // color shift: green -> yellow -> red
+      if (r > 0.55) fill.style.background = 'rgba(120,255,160,0.85)';
+      else if (r > 0.25) fill.style.background = 'rgba(255,210,120,0.88)';
+      else fill.style.background = 'rgba(255,120,120,0.9)';
+    }
+
+    const mesh = visuals.get(e);
+    if (!mesh) continue;
+    const yOff = getEntityBaseY(e) + (e.hovering ? 2.15 : 1.25);
+    const p3 = new THREE.Vector3(e.car.position.x, yOff, e.car.position.y);
+    const { x, y, onScreen } = worldToScreen(p3);
+    const visible = onScreen && !renderer.xr.isPresenting;
+    bar.style.display = visible ? 'block' : 'none';
+    if (visible) {
+      bar.style.transform = `translate(${Math.round(x - 32)}px, ${Math.round(y)}px)`;
+    }
+  }
+
+  // cleanup
+  for (const [e] of list(healthBars)) {
+    if (!alive.has(e)) removeHealthBar(e);
+  }
+}
+
+function list<K,V>(m: Map<K,V>): [K,V][] { return Array.from(m.entries()); }
+
+
 function el<T extends HTMLElement>(sel: string): T | null {
   return document.querySelector(sel) as T | null;
 }
@@ -39,6 +131,7 @@ const startBtn = requireEl<HTMLButtonElement>('#startBtn');
 const restartBtn = requireEl<HTMLButtonElement>('#btnRestart');
 const freezeEnemiesBtn = requireEl<HTMLButtonElement>('#btnFreezeEnemies');
 const stopAttacksBtn = requireEl<HTMLButtonElement>('#btnStopAttacks');
+const enterBuildingBtn = requireEl<HTMLButtonElement>('#btnEnterBuilding');
 const vehicleSel = requireEl<HTMLSelectElement>('#vehicleSel');
 const bloomToggle = el<HTMLInputElement>('#bloomToggle');
 const slowmoToggle = el<HTMLInputElement>('#slowmoToggle');
@@ -474,22 +567,22 @@ function setMaterialFade(m: THREE.Material, alpha: number) {
 function spawnGreatExplosion(pos: THREE.Vector3, tint: number, intensity = 1.0) {
   // Core fireball
   particles.setColor(tint);
-  particles.spawnExplosion(pos, 1.2 * intensity * EXPLOSION_INTENSITY_SCALE);
+  particles.spawnExplosion(pos, 0.85 * intensity * EXPLOSION_INTENSITY_SCALE);
 
   // Hot white sparks
   sparks.setColor(0xffffff);
-  sparks.spawnSparks(pos.clone().add(new THREE.Vector3(0, 0.08, 0)), 1.25 * intensity);
+  sparks.spawnSparks(pos.clone().add(new THREE.Vector3(0, 0.08, 0)), 1.55 * intensity);
 
   // Secondary glowing burst (quick pop)
   particles.setColor(0xffffff);
-  particles.spawnExplosion(pos.clone().add(new THREE.Vector3(0, 0.08, 0)), 0.55 * intensity * EXPLOSION_INTENSITY_SCALE);
+  particles.spawnExplosion(pos.clone().add(new THREE.Vector3(0, 0.08, 0)), 0.35 * intensity * EXPLOSION_INTENSITY_SCALE);
 
   // Smoke plume (lingers)
   smoke.setColor(0x55606b);
-  smoke.spawnSmoke(pos.clone().add(new THREE.Vector3(0, 0.15, 0)), 0.45 * intensity);
+  smoke.spawnSmoke(pos.clone().add(new THREE.Vector3(0, 0.15, 0)), 0.62 * intensity);
 
   // Radial streaks (readable in VR and on desktop)
-  const n = 10;
+  const n = 14;
   for (let i = 0; i < n; i++) {
     const a = (i / n) * Math.PI * 2 + Math.random() * 0.25;
     const r = 1.2 + Math.random() * 1.2;
@@ -691,10 +784,15 @@ function attachDefaultLoadout(ent: Entity, opts: { airstrikeSink?: { addAirstrik
 }
 
 function attachHumanLoadout(ent: Entity) {
-  // Anti-materiel rifle: slow cadence, huge damage, long range.
+  // Human weapons are cycled with middle mouse (desktop) or a VR button.
+  // 0) Anti-materiel rifle: slow cadence, huge damage, long range.
   ent.weapons.push(new AntiMaterielRifle(ent, 0.55, null, 120, 34));
-  // Bazooka: dumb rocket with a chunky explosion.
+  // 1) Carbine/SMG: faster, lower damage, good for soft targets.
+  ent.weapons.push(new MachineGun(ent, 0.11, null, 40, 6));
+  // 2) Bazooka: dumb rocket with a chunky, mostly-spark explosion.
   ent.weapons.push(new RocketWeapon(ent, 1.25, 18, 22, 3.4, 70));
+  // 3) Stinger: lock-on anti-air missile. Intended for enemy helicopters.
+  ent.weapons.push(new StingerWeapon(ent, 2.15, 6, 36, 4.8, 2.4, 110));
 }
 
 function addVisual(ent: Entity, type: VehicleVisualType) {
@@ -718,6 +816,7 @@ function removeVisual(ent: Entity) {
       }
     });
   }
+  removeHealthBar(ent);
   visuals.delete(ent);
   vehicleType.delete(ent);
 }
@@ -739,6 +838,8 @@ function spawnEnemies(count: number) {
     const e = new Enemy(new Car(), 60);
     e.car.position.x = (Math.random() - 0.5) * 80;
     e.car.position.y = (Math.random() - 0.5) * 80;
+    e.chooseRandomPark(80);
+    e.chooseRandomPark(80);
     // Simple enemy loadout: MG + mines + occasional rocket
     e.weapons.push(new MachineGun(e, 0.18, null, 24, 2));
     e.weapons.push(new MineWeapon(e, 3.2, 999, 0.45, 3.0, 16));
@@ -759,6 +860,9 @@ function spawnEnemyHelicopters(count: number) {
     e.car.turnRate = 2.6;
     e.car.position.x = (Math.random() - 0.5) * 80;
     e.car.position.y = (Math.random() - 0.5) * 80;
+    e.chooseRandomPark(90);
+    e.chooseRandomPark(80);
+    e.chooseRandomPark(80);
     e.weapons.push(new Minigun(e, 0.05, null, 28, 2));
     e.weapons[0].autoFire = true;
     sim.addEnemy(e);
@@ -837,10 +941,24 @@ window.addEventListener('keydown', (e) => {
 });
 window.addEventListener('keyup', (e) => keys.delete(e.code));
 
+// Middle mouse cycles human weapons on desktop.
+window.addEventListener('mousedown', (e) => {
+  if (e.button !== 1) return;
+  const choice = (vehicleSel.value as VehicleChoice) || 'sports';
+  if (choice !== 'human' || !player) return;
+  humanWeaponIndex = (humanWeaponIndex + 1) % Math.max(1, player.weapons.length);
+  e.preventDefault();
+});
+
 function key(code: string) { return keys.has(code); }
 
 // Targeting and lock state
 let lockProgress = 0;
+
+// Human weapon cycling (desktop: middle mouse; VR: button)
+let humanWeaponIndex = 0;
+let vrCycleWeaponPrev = false;
+
 let locked = false;
 
 function getTargetsSorted(): Entity[] {
@@ -848,6 +966,11 @@ function getTargetsSorted(): Entity[] {
   const aliveEnemies = sim.enemies.filter(e => e.alive);
   const aliveOnlookers = sim.onlookers.filter(o => o.alive);
   return [...aliveEnemies, ...aliveOnlookers];
+}
+
+function getHeliTargetsSorted(): Entity[] {
+  if (!sim || !player) return [];
+  return sim.enemies.filter(e => e.alive && e.hovering);
 }
 
 function clampArena(ent: Entity) {
@@ -938,7 +1061,7 @@ function isVRButtonPressed(buttonIndex: number): boolean {
 
 // Trigger fires MG; squeeze drops mine; A/X fires missile if locked
 function hookXRButtons() {
-  const onSelect = () => fireMachineGun();
+  const onSelect = () => firePrimary();
   const onSqueeze = () => {
     // Human uses squeeze as bazooka; vehicles use squeeze as mine drop.
     if (player && (vehicleSel.value as VehicleChoice) === 'human') fireBazooka();
@@ -951,11 +1074,87 @@ function hookXRButtons() {
 }
 hookXRButtons();
 
+
+function cycleHumanWeapon(): void {
+  if (!player) return;
+  const choice = (vehicleSel.value as VehicleChoice) || 'sports';
+  if (choice !== 'human') return;
+  // Human loadout order is stable; clamp index.
+  humanWeaponIndex = (humanWeaponIndex + 1) % Math.max(1, player.weapons.length);
+}
+
+function currentHumanWeaponName(): string {
+  if (!player) return '';
+  const w = player.weapons[humanWeaponIndex];
+  if (!w) return '';
+  if (w instanceof AntiMaterielRifle) return 'Anti-materiel rifle';
+  if (w instanceof StingerWeapon) return 'Stinger (AA)';
+  if (w instanceof RocketWeapon) return 'Bazooka';
+  if (w instanceof MachineGun) return 'Carbine';
+  return 'Weapon';
+}
+
+
 // --- Weapon actions (player) ---
 function getWeapon<T>(cls: new (...args: any[]) => T): T | null {
   if (!player) return null;
   for (const w of player.weapons) if (w instanceof cls) return w as any;
   return null;
+}
+
+function firePrimary(): void {
+  const choice = (vehicleSel.value as VehicleChoice) || 'sports';
+  if (choice === 'human') {
+    fireHumanWeapon();
+    return;
+  }
+  fireMachineGun();
+}
+
+function fireHumanWeapon(): void {
+  if (!sim || !player || !targeting) return;
+  const w = player.weapons[humanWeaponIndex];
+  if (!w) return;
+
+  // Decide a target set depending on weapon.
+  const candidates = (w instanceof StingerWeapon) ? getHeliTargetsSorted() : getTargetsSorted();
+  const t = targeting.getTarget();
+  const target = (t && candidates.includes(t)) ? t : (candidates[0] ?? null);
+  if (!target) return;
+
+  if (w instanceof StingerWeapon) {
+    // Requires lock; lock is computed in the fixed-step update.
+    if (!locked) return;
+    w.fire(sim.simTime, target);
+    // visible missile tracer hint (actual projectile visuals are in updateParticlesFromProjectiles)
+    spawnTracer(player.car.position.x, player.car.position.y, target.car.position.x, target.car.position.y, 'missile');
+    return;
+  }
+
+  if (w instanceof RocketWeapon) {
+    // Bazooka is treated as a short-range rocket.
+    fireBazooka();
+    return;
+  }
+
+  if (w instanceof AntiMaterielRifle) {
+    w.fire(sim.simTime, target);
+    spawnTracer(player.car.position.x, player.car.position.y, target.car.position.x, target.car.position.y, 'antimateriel');
+    // smaller muzzle flash
+    particles.setColor(WEAPON_VFX.antimateriel.impactColor);
+    particles.spawnExplosion(new THREE.Vector3(player.car.position.x, getEntityBaseY(player) + 0.35, player.car.position.y), 0.028 * EXPLOSION_INTENSITY_SCALE);
+    particles.setColor(DEFAULT_PARTICLE_COLOR);
+    return;
+  }
+
+  if (w instanceof MachineGun) {
+    w.fire(sim.simTime, target);
+    spawnTracer(player.car.position.x, player.car.position.y, target.car.position.x, target.car.position.y, 'machinegun');
+    particles.setColor(WEAPON_VFX.machinegun.impactColor);
+    particles.spawnExplosion(new THREE.Vector3(player.car.position.x, getEntityBaseY(player) + 0.35, player.car.position.y), 0.032 * EXPLOSION_INTENSITY_SCALE);
+    particles.setColor(DEFAULT_PARTICLE_COLOR);
+    return;
+  }
 }
 
 function spawnTracer(startX: number, startY: number, endX: number, endY: number, key: keyof typeof WEAPON_VFX) {
@@ -1179,6 +1378,14 @@ stopAttacksBtn.addEventListener('click', () => {
   sim.disableEnemyAttacks = !sim.disableEnemyAttacks;
   stopAttacksBtn.textContent = sim.disableEnemyAttacks ? 'Attack ON' : 'No-Attack';
 });
+
+enterBuildingBtn.addEventListener('click', () => {
+  if (!player) return;
+  const choice = (vehicleSel.value as VehicleChoice) || 'sports';
+  if (choice !== 'human') return;
+  tryEnterBuildingRoof();
+});
+
 
 onChange(enemyHeliToggle, () => {
   if (!sim) return;
@@ -1612,6 +1819,7 @@ function step(now: number) {
       syncEntityVisuals(dt);
     }
     updateHUD();
+    updateHealthBars();
     drawMinimap();
 
     if (replayT >= replayEndT) {
@@ -1619,12 +1827,21 @@ function step(now: number) {
     }
 
     // camera + render
-    if (!renderer.xr.isPresenting) {
+    
+if (!renderer.xr.isPresenting) {
       const px = player.car.position.x;
       const pz = player.car.position.y;
-      const { position, target } = computeDesktopCamera(px, pz, player.car.heading, desktopCamMode, desktopZoom);
-      camera.position.lerp(position, 0.14);
-      camera.lookAt(target);
+      const choiceNow = (vehicleSel.value as VehicleChoice) || 'sports';
+      if (choiceNow === 'human') {
+        const eye = new THREE.Vector3(px, getEntityBaseY(player) + 1.55, pz);
+        const f = new THREE.Vector3(Math.cos(player.car.heading), 0, Math.sin(player.car.heading));
+        camera.position.lerp(eye, 0.25);
+        camera.lookAt(eye.clone().add(f.multiplyScalar(3)));
+      } else {
+        const { position, target } = computeDesktopCamera(px, pz, player.car.heading, desktopCamMode, desktopZoom);
+        camera.position.lerp(position, 0.14);
+        camera.lookAt(target);
+      }
     }
     if (bloomPass.enabled) composer.render();
     else renderer.render(scene, camera);
@@ -1648,7 +1865,7 @@ function step(now: number) {
     // One-shot actions
     const choice = (vehicleSel.value as VehicleChoice) || 'sports';
     if (choice === 'human') {
-      if (key('Space')) fireMachineGun(); // anti-materiel
+      if (key('Space')) firePrimary();
       if (key('KeyQ')) fireBazooka();
       if (key('KeyE')) {
         keys.delete('KeyE');
@@ -1658,6 +1875,9 @@ function step(now: number) {
       const vrEnterNow = isXR && isVRButtonPressed(2);
       if (vrEnterNow && !vrEnterRoofPrev) tryEnterBuildingRoof();
       vrEnterRoofPrev = vrEnterNow;
+      const vrCycleNow = isXR && isVRButtonPressed(3);
+      if (vrCycleNow && !vrCycleWeaponPrev) cycleHumanWeapon();
+      vrCycleWeaponPrev = vrCycleNow;
     } else {
       if (key('Space')) fireMachineGun();
       if (key('ShiftLeft') || key('ShiftRight')) dropMine();
@@ -1673,7 +1893,9 @@ function step(now: number) {
     // target cycle
     if (key('Tab')) {
       keys.delete('Tab');
-      targeting.cycleTargets(getTargetsSorted());
+      const choiceNow = (vehicleSel.value as VehicleChoice) || 'sports';
+      const isStinger = choiceNow === 'human' && player && (player.weapons[humanWeaponIndex] instanceof StingerWeapon);
+      targeting.cycleTargets(isStinger ? getHeliTargetsSorted() : getTargetsSorted());
     }
 
     // tabletop adjustments in VR (use bracket keys on desktop too)
@@ -1720,7 +1942,9 @@ function step(now: number) {
       }
 
       // lock update
-      const ls = targeting.updateLock(fixedDt, player.car.position, player.car.heading, { range: 32, coneRadians: Math.PI / 2.2, lockTime: 0.75 });
+      const choiceNow = (vehicleSel.value as VehicleChoice) || 'sports';
+      const isStinger = choiceNow === 'human' && player.weapons[humanWeaponIndex] instanceof StingerWeapon;
+      const ls = targeting.updateLock(fixedDt, player.car.position, player.car.heading, isStinger ? { range: 60, coneRadians: Math.PI / 3.2, lockTime: 1.0 } : { range: 32, coneRadians: Math.PI / 2.2, lockTime: 0.75 });
       lockProgress = ls.lockProgress01;
       locked = ls.locked;
 
@@ -1759,16 +1983,26 @@ function step(now: number) {
       syncEntityVisuals(dt);
     }
     updateHUD();
+    updateHealthBars();
     drawMinimap();
   }
 
   // Desktop camera: playable view with toggleable top/chase mode + mouse wheel zoom.
-  if (player && !renderer.xr.isPresenting) {
+  
+if (player && !renderer.xr.isPresenting) {
     const px = player.car.position.x;
     const pz = player.car.position.y;
-    const { position, target } = computeDesktopCamera(px, pz, player.car.heading, desktopCamMode, desktopZoom);
-    camera.position.lerp(position, desktopCamMode === 'top' ? 0.12 : 0.14);
-    camera.lookAt(target);
+    const choiceNow = (vehicleSel.value as VehicleChoice) || 'sports';
+    if (choiceNow === 'human') {
+      const eye = new THREE.Vector3(px, getEntityBaseY(player) + 1.55, pz);
+      const f = new THREE.Vector3(Math.cos(player.car.heading), 0, Math.sin(player.car.heading));
+      camera.position.lerp(eye, 0.25);
+      camera.lookAt(eye.clone().add(f.multiplyScalar(3)));
+    } else {
+      const { position, target } = computeDesktopCamera(px, pz, player.car.heading, desktopCamMode, desktopZoom);
+      camera.position.lerp(position, desktopCamMode === 'top' ? 0.12 : 0.14);
+      camera.lookAt(target);
+    }
   }
 
   // render
