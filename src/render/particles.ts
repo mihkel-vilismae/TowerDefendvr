@@ -18,6 +18,11 @@ type Particle = {
 export class ParticleSystem {
   private readonly maxParticles: number;
   private readonly particles: Particle[] = [];
+  /**
+   * Scales spawn counts for performance. Useful for VR where CPU budgets are tighter.
+   * 1.0 = full effect, 0.5 = half the particles.
+   */
+  private spawnScale = 1;
   private readonly geometry: THREE.BufferGeometry;
   private readonly positions: Float32Array;
   private readonly alphas: Float32Array;
@@ -85,9 +90,19 @@ export class ParticleSystem {
     this.material.uniforms.uColor.value.set(color);
   }
 
+  setSpawnScale(scale01: number) {
+    // Clamp defensively.
+    this.spawnScale = Math.max(0, Math.min(1, scale01));
+  }
+
+  /** Scale spawn counts (not maxParticles). */
+  setSpawnScale(scale: number) {
+    this.spawnScale = Math.max(0, Math.min(1, scale));
+  }
+
   spawnExplosion(center: THREE.Vector3, intensity = 1) {
     // Keep explosions compact; intensity still scales, but far less aggressively.
-    const count = Math.min(70, Math.floor(28 + intensity * 55));
+    const count = Math.min(70, Math.floor((28 + intensity * 55) * this.spawnScale));
     for (let i = 0; i < count; i++) {
       if (this.particles.length >= this.maxParticles) break;
       const dir = new THREE.Vector3(
@@ -113,7 +128,7 @@ export class ParticleSystem {
    * Use an additive system with a small point size for best readability.
    */
   spawnSparks(center: THREE.Vector3, intensity = 1) {
-    const count = Math.min(90, Math.floor(18 + intensity * 70));
+    const count = Math.min(90, Math.floor((18 + intensity * 70) * this.spawnScale));
     for (let i = 0; i < count; i++) {
       if (this.particles.length >= this.maxParticles) break;
       const dir = new THREE.Vector3(
@@ -137,7 +152,7 @@ export class ParticleSystem {
    * Longer-lived smoke. Best used with NormalBlending and larger point size.
    */
   spawnSmoke(center: THREE.Vector3, intensity = 1) {
-    const count = Math.min(55, Math.floor(8 + intensity * 40));
+    const count = Math.min(55, Math.floor((8 + intensity * 40) * this.spawnScale));
     for (let i = 0; i < count; i++) {
       if (this.particles.length >= this.maxParticles) break;
       const dir = new THREE.Vector3(

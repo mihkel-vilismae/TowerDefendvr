@@ -60,6 +60,25 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.xr.enabled = true;
 app.appendChild(renderer.domElement);
 
+// VR performance tuning: drop pixel ratio + particle spawn counts while in XR.
+// This keeps CPU/GPU budgets reasonable on SteamVR, especially with heavy VFX.
+const DESKTOP_PIXEL_RATIO = Math.min(2, window.devicePixelRatio);
+const VR_PIXEL_RATIO = 1; // conservative for Vive Pro
+
+renderer.xr.addEventListener('sessionstart', () => {
+  renderer.setPixelRatio(VR_PIXEL_RATIO);
+  // Some runtimes expose foveation; safe to call when available.
+  try {
+    (renderer.xr as any).setFoveation?.(1);
+  } catch {
+    // ignore
+  }
+});
+
+renderer.xr.addEventListener('sessionend', () => {
+  renderer.setPixelRatio(DESKTOP_PIXEL_RATIO);
+});
+
 // WebXR button
 // SteamVR (HTC Vive Pro) can throw NotSupportedError if we request unsupported features like "layers".
 // Keep the session init minimal and broadly compatible.
@@ -1547,6 +1566,10 @@ function updateParticlesFromProjectiles() {
   }
 }
 
+// VFX throttling: in VR we update particle systems at a lower fixed rate.
+// This dramatically reduces main-thread spikes (SteamVR is sensitive to them).
+let vfxAccum = 0;
+
 function step(now: number) {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
@@ -1563,14 +1586,31 @@ function step(now: number) {
     }
 
     // advance visuals without sim
-    syncPickupVisuals();
-    syncEntityVisuals(dt);
-    updateParticlesFromProjectiles();
-    particles.update(dt);
-    sparks.update(dt);
-    smoke.update(dt);
-    updateDebris(dt);
-    tracers.update(dt);
+    const isXR = renderer.xr.isPresenting;
+    const vfxScale = isXR ? 0.45 : 1;
+    particles.setSpawnScale(vfxScale);
+    sparks.setSpawnScale(vfxScale);
+    smoke.setSpawnScale(vfxScale);
+
+    // In VR, throttle particle updates to reduce rAF spikes.
+    vfxAccum = isXR ? vfxAccum + dt : 0;
+    const doVfxTick = !isXR || vfxAccum >= 1 / 45;
+    const vfxDt = isXR ? vfxAccum : dt;
+    if (doVfxTick) {
+      if (isXR) vfxAccum = 0;
+      syncPickupVisuals();
+      syncEntityVisuals(vfxDt);
+      updateParticlesFromProjectiles();
+      particles.update(vfxDt);
+      sparks.update(vfxDt);
+      smoke.update(vfxDt);
+      updateDebris(vfxDt);
+      tracers.update(vfxDt);
+    } else {
+      // Keep HUD/minimap responsive even when throttling VFX.
+      syncPickupVisuals();
+      syncEntityVisuals(dt);
+    }
     updateHUD();
     drawMinimap();
 
@@ -1695,14 +1735,29 @@ function step(now: number) {
 
   // visuals
   if (sim) {
-    syncPickupVisuals();
-    syncEntityVisuals(dt);
-    updateParticlesFromProjectiles();
-    particles.update(dt);
-    sparks.update(dt);
-    smoke.update(dt);
-    updateDebris(dt);
-    tracers.update(dt);
+    const isXR = renderer.xr.isPresenting;
+    const vfxScale = isXR ? 0.45 : 1;
+    particles.setSpawnScale(vfxScale);
+    sparks.setSpawnScale(vfxScale);
+    smoke.setSpawnScale(vfxScale);
+
+    vfxAccum = isXR ? vfxAccum + dt : 0;
+    const doVfxTick = !isXR || vfxAccum >= 1 / 45;
+    const vfxDt = isXR ? vfxAccum : dt;
+    if (doVfxTick) {
+      if (isXR) vfxAccum = 0;
+      syncPickupVisuals();
+      syncEntityVisuals(vfxDt);
+      updateParticlesFromProjectiles();
+      particles.update(vfxDt);
+      sparks.update(vfxDt);
+      smoke.update(vfxDt);
+      updateDebris(vfxDt);
+      tracers.update(vfxDt);
+    } else {
+      syncPickupVisuals();
+      syncEntityVisuals(dt);
+    }
     updateHUD();
     drawMinimap();
   }

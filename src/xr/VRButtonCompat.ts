@@ -41,7 +41,7 @@ export class VRButtonCompat {
 
     // Conservative defaults: avoid 'layers' and other optional features.
     // 'local-floor' yields stable standing/seated height.
-    const init: XRButtonSessionInit = {
+    const baseInit: XRButtonSessionInit = {
       requiredFeatures: [],
       optionalFeatures: ['local-floor'],
       ...(sessionInit ?? {}),
@@ -49,8 +49,15 @@ export class VRButtonCompat {
 
     // Ensure we never request features that trigger runtime errors for the user's setup.
     // (If you want to opt-in later, do it behind a runtime capability check.)
-    init.requiredFeatures = (init.requiredFeatures ?? []).filter((f) => f !== 'layers');
-    init.optionalFeatures = (init.optionalFeatures ?? []).filter((f) => f !== 'layers');
+    baseInit.requiredFeatures = (baseInit.requiredFeatures ?? []).filter((f) => f !== 'layers');
+    baseInit.optionalFeatures = (baseInit.optionalFeatures ?? []).filter((f) => f !== 'layers');
+
+    // Some SteamVR/OpenXR builds will still fail if *any* optionalFeatures are provided.
+    // We keep a retry init with absolutely no optional/required features.
+    const fallbackInit: XRButtonSessionInit = {
+      requiredFeatures: [],
+      optionalFeatures: [],
+    };
 
     let currentSession: XRSession | null = null;
 
@@ -80,12 +87,21 @@ export class VRButtonCompat {
       }
 
       try {
-        const session = await xr.requestSession('immersive-vr', init);
+        const session = await xr.requestSession('immersive-vr', baseInit);
         await onSessionStarted(session);
       } catch (err) {
-        // Provide useful feedback in dev console.
-        // eslint-disable-next-line no-console
-        console.error('[XR] requestSession failed', err);
+        // Retry with a fully empty init for runtimes that choke on optional features.
+        try {
+          const session = await xr.requestSession('immersive-vr', fallbackInit);
+          await onSessionStarted(session);
+          return;
+        } catch (err2) {
+          // Provide useful feedback in dev console.
+          // eslint-disable-next-line no-console
+          console.error('[XR] requestSession failed', err);
+          // eslint-disable-next-line no-console
+          console.error('[XR] requestSession fallback failed', err2);
+        }
       }
     };
 
