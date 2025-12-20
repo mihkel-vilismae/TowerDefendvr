@@ -89,10 +89,18 @@ function updateHealthBars(): void {
   const ents = sim.enemies.filter(e => e.alive);
   const alive = new Set<Entity>();
   for (const e of ents) {
+    const r = e.maxHP > 0 ? (e.hp / e.maxHP) : 0;
+
+    // Hide health bars for enemies that have not been hurt yet (full HP).
+    // This keeps the screen clean until combat starts.
+    if (r >= 0.999) {
+      removeHealthBar(e);
+      continue;
+    }
+
     alive.add(e);
     const bar = ensureHealthBar(e);
     const fill = bar.querySelector('[data-role="fill"]') as HTMLDivElement | null;
-    const r = e.maxHP > 0 ? (e.hp / e.maxHP) : 0;
     if (fill) {
       fill.style.width = `${Math.max(0, Math.min(1, r)) * 100}%`;
       // color shift: green -> yellow -> red
