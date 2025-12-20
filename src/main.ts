@@ -61,7 +61,15 @@ renderer.xr.enabled = true;
 app.appendChild(renderer.domElement);
 
 // WebXR button
-document.body.appendChild(VRButton.createButton(renderer));
+// SteamVR (HTC Vive Pro) can throw NotSupportedError if we request unsupported features like "layers".
+// Keep the session init minimal and broadly compatible.
+document.body.appendChild(
+  VRButton.createButton(renderer, {
+    // local-floor gives a stable, seated/standing reference space.
+    // Avoid requesting experimental/optional features here (e.g. "layers") to improve compatibility.
+    optionalFeatures: ['local-floor'],
+  })
+);
 
 const scene = new THREE.Scene();
 scene.fog = new THREE.Fog(0x0b0d12, 25, 170);
