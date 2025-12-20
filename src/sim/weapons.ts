@@ -343,6 +343,18 @@ export class HomingMissileWeapon extends WeaponBase {
 }
 
 /**
+ * Stinger: an anti-air lock-on missile for the human player.
+ *
+ * This is a specialized HomingMissileWeapon with higher turn rate and damage.
+ * Caller is expected to only fire it at hovering targets (helicopters).
+ */
+export class StingerWeapon extends HomingMissileWeapon {
+  constructor(owner: Entity, cooldown = 2.0, ammo: number | null = 6, speed = 34, turnRate = 4.4, radius = 2.6, damage = 95) {
+    super(owner, cooldown, ammo, speed, turnRate, radius, damage);
+  }
+}
+
+/**
  * Minigun: a faster-firing machinegun variant. Still hitscan, but with a shorter cooldown.
  */
 export class Minigun extends MachineGun {
