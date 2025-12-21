@@ -83,6 +83,21 @@ npm test
 
 Tests cover core weapon rules and basic simulation logic.
 
+## TD-RTS-FPS Hybrid Mode
+
+This repository includes an experimental **tower defence + RTS + FPS hybrid** mode.
+To enable it, select **TD-RTS-FPS** from the **Mode** dropdown in the UI before pressing **Start**.
+
+### What you'll see
+
+- **Build phase UI:** After starting, a new panel labelled *TD Build & Research* appears beneath the HUD. Use the buttons to choose a unit type (Auto Turret, Sniper Turret, EMP Node, Trooper Squad). When selected, the mouse cursor becomes a placement tool – click on a valid ground location within the arena bounds to place the unit. Each unit costs credits, displayed in the HUD. Credits are earned by killing enemies.
+- **Wave start:** The game automatically starts the first wave. Enemies spawn from the edges in clearly defined waves. When all enemies are destroyed, the phase switches back to *build* and you may place additional units or research tech before the next wave begins. Credits and wave number are shown in the HUD.
+- **Research/tech tree:** In the same panel, buttons represent technologies such as *Improved Barrels* and *Better Optics*. Technologies cost credits and may require prerequisites. Unlocks apply global bonuses (damage, range, cooldown) or unlock new unit types.
+- **RTS controls:** Left-click an existing trooper squad to select it (Shift-click to add to selection). Right-click on the ground to issue a move command – squads will steer toward that point. Towers cannot be moved but will automatically attack enemies within range.
+- **Possession controls:** Experimental FPS possession allows you to take first-person control of a selected unit. Press **Z** to possess the selected unit and **X** (or *Escape*) to exit. While possessed, the camera snaps to the unit. Aiming and firing controls are currently limited and will be expanded in future iterations.
+
+This mode preserves all other existing game modes (Arena and Race) and does not remove any functionality from them.
+
 ## Project structure
 
 - `src/sim/**` – deterministic simulation logic (no Three.js)
