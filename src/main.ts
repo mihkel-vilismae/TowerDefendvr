@@ -27,6 +27,13 @@ import { headingToYaw } from './render/headingToYaw';
 
 // Tower defence support: towers and wave management
 import { TowerDefense, Tower } from './sim/towerDefense';
+// TD-RTS-FPS hybrid imports
+import { Friendly, FriendlyType } from './sim/friendly';
+import { CommandSystem } from './sim/commands';
+import { WaveScheduler, Phase } from './sim/waves';
+import { TechTree, defaultTechs } from './sim/techTree';
+import { PossessionState } from './sim/possession';
+import { initTdPanel } from './ui/tdPanel';
 
 type VehicleChoice = 'sports' | 'muscle' | 'buggy' | 'tank' | 'heli' | 'human';
 
@@ -262,6 +269,106 @@ let buildingMeshes: THREE.Mesh[] = [];
 // Tower defence manager for the current simulation. Null when not in a game.
 let towerDef: TowerDefense | null = null;
 
+// --- TD-RTS-FPS hybrid state ---
+// Friendly units placed by the player during TD mode.
+let friendlies: Friendly[] = [];
+// Mapping from friendly unit to its 3D mesh for rendering/updates.
+const friendlyVisuals = new Map<Friendly, THREE.Object3D>();
+// Player currency used to build units and research tech. Earned per enemy kill.
+let credits = 0;
+// Command system manages selection and move orders for movable units.
+let commandSys: CommandSystem | null = null;
+// Wave scheduler controls build/combat phases and enemy spawns.
+let waveScheduler: WaveScheduler | null = null;
+// Tech tree for research unlocks and upgrades.
+let techTree: TechTree | null = null;
+// Possession state for taking control of a friendly unit (FPS). Currently unused beyond stub.
+let possession: PossessionState | null = null;
+// Pending build type selected in the UI. When set, a click on the world will attempt to place this unit.
+let pendingBuildType: FriendlyType | null = null;
+// Global stat multipliers modified by research. Multiplicative to base stats.
+let friendlyDamageBoost = 1;
+let friendlyRangeBoost = 1;
+let friendlyCooldownMultiplier = 1;
+// Unlockable unit types. Start with core set; Tier 3 tech may add more.
+let unlockedTypes: FriendlyType[] = ['auto', 'sniper', 'emp', 'trooper'];
+
+// Track enemy count from previous update to award credits when kills occur.
+let prevEnemyCount = 0;
+
+// Create a simple mesh for each friendly unit type. Colours hint at their role.
+function createFriendlyMesh(f: Friendly): THREE.Object3D {
+  let mesh: THREE.Mesh;
+  switch (f.type) {
+    case 'auto':
+      mesh = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.4, 0.4, 1.2, 10),
+        new THREE.MeshStandardMaterial({ color: 0x4df3ff, emissive: 0x4df3ff, emissiveIntensity: 0.6, roughness: 0.4, metalness: 0.2 })
+      );
+      break;
+    case 'sniper':
+      mesh = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.35, 0.35, 1.4, 12),
+        new THREE.MeshStandardMaterial({ color: 0xff7cff, emissive: 0xff7cff, emissiveIntensity: 0.5, roughness: 0.4, metalness: 0.2 })
+      );
+      break;
+    case 'emp':
+      mesh = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.5, 0.5, 0.8, 8),
+        new THREE.MeshStandardMaterial({ color: 0x7cfffa, emissive: 0x7cfffa, emissiveIntensity: 0.5, roughness: 0.5, metalness: 0.2 })
+      );
+      break;
+    case 'trooper':
+      // Trooper squads are represented by a slightly taller prism.
+      mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(0.6, 1.0, 0.6),
+        new THREE.MeshStandardMaterial({ color: 0xffc86b, emissive: 0xffc86b, emissiveIntensity: 0.45, roughness: 0.6, metalness: 0.15 })
+      );
+      break;
+    case 'missile':
+      mesh = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.5, 0.5, 1.5, 10),
+        new THREE.MeshStandardMaterial({ color: 0xff6058, emissive: 0xff6058, emissiveIntensity: 0.6, roughness: 0.35, metalness: 0.25 })
+      );
+      break;
+    default:
+      mesh = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.4, 0.4, 1.2, 10),
+        new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 0.3 })
+      );
+  }
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  // Elevated slightly so it sits above the ground
+  mesh.position.set(f.position.x, 0.6, f.position.y);
+  return mesh;
+}
+
+// Add a friendly unit to the game world and create its visual representation.
+function addFriendlyUnit(f: Friendly): void {
+  friendlies.push(f);
+  const mesh = createFriendlyMesh(f);
+  friendlyVisuals.set(f, mesh);
+  tabletop.root.add(mesh);
+}
+
+// Remove all friendly visuals from the scene (called on reset).
+function clearFriendlyVisuals(): void {
+  for (const mesh of friendlyVisuals.values()) {
+    tabletop.root.remove(mesh);
+  }
+  friendlyVisuals.clear();
+}
+
+// Update positions of friendly visuals to match simulation coordinates.
+function updateFriendlyVisuals(): void {
+  for (const [f, mesh] of friendlyVisuals) {
+    mesh.position.x = f.position.x;
+    mesh.position.z = f.position.y;
+    // Keep Y constant; troopers could perhaps tilt but we ignore for simplicity.
+  }
+}
+
 function rebuildArena(): void {
   if (arena) {
     arena.removeFromParent();
@@ -278,7 +385,9 @@ function rebuildArena(): void {
 rebuildArena();
 
 // --- Race track visuals + tracker (simple loop) ---
-type GameMode = 'arena' | 'race';
+// Extend game modes with tower defense/RTS/FPS hybrid. New mode preserves
+// existing functionality and adds build/research/possession features.
+type GameMode = 'arena' | 'race' | 'td_rts_fps';
 let gameMode: GameMode = 'arena';
 let raceTracker: RaceTracker | null = null;
 let raceStartSimTime = 0;
@@ -363,10 +472,12 @@ function setGameMode(m: GameMode) {
 
 // Keep mode toggle responsive even before starting.
 modeSel.addEventListener('change', () => {
-  const v = (modeSel.value === 'race') ? 'race' : 'arena';
+  // Cast the selected value to GameMode. Fall back to 'arena' if unknown.
+  const v = modeSel.value as GameMode;
   setGameMode(v);
 });
-setGameMode(modeSel.value === 'race' ? 'race' : 'arena');
+// Initialize game mode based on selected value. Cast ensures type safety.
+setGameMode(modeSel.value as GameMode);
 
 // Switch between desktop 1:1 world and VR tabletop diorama.
 renderer.xr.addEventListener('sessionstart', () => {
@@ -999,6 +1110,92 @@ window.addEventListener('mousedown', (e) => {
   e.preventDefault();
 });
 
+// --- TD-RTS-FPS mode input handlers (desktop) ---
+// Convert screen coordinates to world (simulation) coordinates on the ground plane (y=0).
+function screenToWorld(clientX: number, clientY: number): { x: number; y: number; } | null {
+  const rect = renderer.domElement.getBoundingClientRect();
+  const ndcX = ((clientX - rect.left) / rect.width) * 2 - 1;
+  const ndcY = -((clientY - rect.top) / rect.height) * 2 + 1;
+  const ndc = new THREE.Vector3(ndcX, ndcY, 0.5);
+  ndc.unproject(camera);
+  const dir = ndc.sub(camera.position).normalize();
+  // Intersect with ground plane y=0. If camera is below ground, ignore.
+  if (Math.abs(dir.y) < 1e-4) return null;
+  const t = -camera.position.y / dir.y;
+  if (t < 0) return null;
+  const worldX = camera.position.x + dir.x * t;
+  const worldY = camera.position.z + dir.z * t;
+  return { x: worldX, y: worldY };
+}
+
+// Handle left/right clicks for building, selecting and commanding in TD mode.
+renderer.domElement.addEventListener('mousedown', (ev) => {
+  // Only intercept in TD mode and when not interacting with UI (panel/minimap).
+  if (gameMode !== 'td_rts_fps') return;
+  // Ignore if clicking on HUD or panel
+  const target = ev.target as HTMLElement;
+  if (target.closest('#panel') || target.closest('#hud') || target.closest('#minimap')) return;
+  // Determine world position
+  const pos = screenToWorld(ev.clientX, ev.clientY);
+  if (!pos || !sim) return;
+  // Left click: build or select
+  if (ev.button === 0) {
+    ev.preventDefault();
+    // Build if pending type and build phase
+    if (waveScheduler && waveScheduler.isReadyForNextWave() && pendingBuildType) {
+      // Validate placement
+      if (techTree && commandSys) {
+        const type: FriendlyType = pendingBuildType;
+        // Determine cost by creating a dummy friendly to read its cost
+        const dummy = new Friendly(type, pos.x, pos.y);
+        const cost = dummy.cost;
+        if (credits >= cost && Friendly.isPlacementValid(pos.x, pos.y, friendlies)) {
+          credits -= cost;
+          const f = new Friendly(type, pos.x, pos.y);
+          addFriendlyUnit(f);
+          // Clear pending after placement
+          pendingBuildType = null;
+        }
+      }
+      return;
+    }
+    // Otherwise, attempt to select a friendly (closest within small radius)
+    if (commandSys) {
+      let closest: Friendly | null = null;
+      let bestDist2 = 3.5 * 3.5;
+      for (const f of friendlies) {
+        const dx = f.position.x - pos.x;
+        const dy = f.position.y - pos.y;
+        const d2 = dx * dx + dy * dy;
+        if (d2 < bestDist2) {
+          bestDist2 = d2;
+          closest = f;
+        }
+      }
+      if (closest) {
+        commandSys.select(closest, ev.shiftKey);
+      } else {
+        // Clear selection if clicked empty
+        commandSys.clearSelection();
+      }
+    }
+  }
+  // Right click: move command for selected troopers
+  if (ev.button === 2) {
+    ev.preventDefault();
+    if (commandSys) {
+      commandSys.moveSelected(new Vector2(pos.x, pos.y));
+    }
+  }
+});
+
+// Prevent context menu when right-clicking on the canvas in TD mode.
+renderer.domElement.addEventListener('contextmenu', (ev) => {
+  if (gameMode === 'td_rts_fps') {
+    ev.preventDefault();
+  }
+});
+
 function key(code: string) { return keys.has(code); }
 
 // Targeting and lock state
@@ -1357,8 +1554,8 @@ function resetWorld() {
   player = makePlayer(choice);
   // reset rooftop state every restart
   setHumanRoofState(false, null);
-  // Respect mode selection.
-  setGameMode(modeSel.value === 'race' ? 'race' : 'arena');
+  // Respect mode selection for all supported game modes.
+  setGameMode(modeSel.value as GameMode);
 
   if (gameMode === 'race') {
     // Spawn just before the finish line so the first cross starts the lap once checkpoints are met.
@@ -1413,11 +1610,11 @@ function resetWorld() {
     for (let i = 0; i < 6; i++) spawnPickup();
   }
 
-  // Initialize tower defence only in non-race modes. Towers provide static
-  // automated defences that attack incoming waves of enemies. Towers are
-  // placed at fixed positions around the centre of the arena. Visuals are
+  // Initialize tower defence only in non-race and non-RTS modes. Classic tower defence
+  // towers provide static automated defences that attack incoming waves of enemies.
+  // They are placed at fixed positions around the centre of the arena. Visuals are
   // created here and stored in `towerVisuals` for cleanup on reset.
-  if (gameMode !== 'race') {
+  if (gameMode !== 'race' && gameMode !== 'td_rts_fps') {
     towerDef = new TowerDefense(sim);
     // Tower positions chosen to roughly cover all approaches into the looped road.
     const towerPositions: [number, number][] = [
@@ -1445,6 +1642,71 @@ function resetWorld() {
       tabletop.root.add(barrel);
       towerVisuals.push(base, barrel);
     }
+  } else {
+    towerDef = null;
+  }
+
+  // --- TD-RTS-FPS hybrid init ---
+  // Only initialise these structures when entering the hybrid mode. Other modes
+  // leave them null so no TD-specific logic runs.
+  if (gameMode === 'td_rts_fps') {
+    friendlies = [];
+    friendlyVisuals.clear();
+    credits = 120; // starting credits for the player
+    commandSys = new CommandSystem();
+    waveScheduler = new WaveScheduler(sim);
+    techTree = new TechTree(defaultTechs);
+    possession = new PossessionState();
+    pendingBuildType = null;
+    friendlyDamageBoost = 1;
+    friendlyRangeBoost = 1;
+    friendlyCooldownMultiplier = 1;
+    unlockedTypes = ['auto', 'sniper', 'emp', 'trooper'];
+    // Immediately show the build/research panel. The callbacks update global state.
+    initTdPanel(techTree, (type: FriendlyType) => {
+      // When clicking a build button, set the pending type if unlocked.
+      if (!unlockedTypes.includes(type)) return;
+      pendingBuildType = type;
+    }, (techId: string) => {
+      // Research callback: adjust global multipliers and unlock units.
+      switch (techId) {
+        case 'improvedBarrels':
+          friendlyDamageBoost *= 1.1;
+          break;
+        case 'betterOptics':
+          friendlyRangeBoost *= 1.15;
+          break;
+        case 'autoloader':
+          friendlyCooldownMultiplier *= 0.85;
+          break;
+        case 'empCapacitors':
+          // Future: modify EMP slowdown duration; noop for now.
+          break;
+        case 'missileTurret':
+          // Unlock a powerful missile turret. We'll treat it as a sniper-like tower with high damage.
+          // Use the 'sniper' type extended by this tech; new type string 'missile' is supported by build UI.
+          (unlockedTypes as any).push('missile');
+          break;
+        case 'trooperArmor':
+          // Trooper squads gain stronger damage in lieu of HP. Increase damage multiplier.
+          friendlyDamageBoost *= 1.2;
+          break;
+      }
+    });
+    // Start the first wave automatically when entering the game. Players can build during combat phase
+    // between waves as well.
+    waveScheduler.startNextWave();
+    // Initialize previous enemy count for credit tracking
+    prevEnemyCount = sim.enemies.filter(e => e.alive).length;
+  } else {
+    // When not in TD mode, hide TD panel by clearing it. This prevents leftover UI
+    // from the hybrid mode when switching back to race or arena.
+    const existing = document.getElementById('tdPanel');
+    if (existing) existing.innerHTML = '';
+    techTree = null;
+    commandSys = null;
+    waveScheduler = null;
+    possession = null;
   }
 
   // Apply enemy helicopter toggle
@@ -1506,7 +1768,10 @@ function updateHUD() {
   const raceLine = (raceTracker && gameMode === 'race')
     ? ` | Lap ${raceTracker.lap}/${Math.max(1, Number(lapsSel.value) || 3)} | CP ${raceTracker.checkpointIndex}/${raceCheckpoints.length} | Time ${(sim.simTime - (raceStartSimTime || sim.simTime)).toFixed(1)}s${raceTracker.finished ? ' (FINISH!)' : ''}`
     : '';
-  hud.textContent = `HP ${player.hp.toFixed(0)}/${player.maxHP}  |  Speed ${speed}  |  Score ${sim.score}  |  Streak ${sim.streak}  |  x${sim.multiplier}  |  Heat ${sim.heat}${raceLine}\n` +
+  const tdLine = (gameMode === 'td_rts_fps' && waveScheduler)
+    ? ` | Credits ${credits.toFixed(0)} | Wave ${waveScheduler.currentWave + 1} | Phase ${waveScheduler.phase}`
+    : '';
+  hud.textContent = `HP ${player.hp.toFixed(0)}/${player.maxHP}  |  Speed ${speed}  |  Score ${sim.score}  |  Streak ${sim.streak}  |  x${sim.multiplier}  |  Heat ${sim.heat}${raceLine}${tdLine}\n` +
     `Target: ${tgt ? (vehicleType.get(tgt) ?? 'target') : 'none'}  |  Lock ${(lockProgress * 100).toFixed(0)}%${locked ? ' (LOCKED)' : ''}`;
 }
 
@@ -1905,6 +2170,8 @@ function step(now: number) {
     if (doVfxTick) {
       if (isXR) vfxAccum = 0;
       syncPickupVisuals();
+      // Update friendly units visuals in both VR and desktop modes. They are static geometry so no heavy VFX.
+      if (gameMode === 'td_rts_fps') updateFriendlyVisuals();
       syncEntityVisuals(vfxDt);
       updateParticlesFromProjectiles();
       particles.update(vfxDt);
@@ -1915,6 +2182,7 @@ function step(now: number) {
     } else {
       // Keep HUD/minimap responsive even when throttling VFX.
       syncPickupVisuals();
+      if (gameMode === 'td_rts_fps') updateFriendlyVisuals();
       syncEntityVisuals(dt);
     }
     updateHUD();
@@ -2017,6 +2285,34 @@ if (!renderer.xr.isPresenting) {
       // the field is clear. Runs on fixed timesteps alongside the simulation.
       if (towerDef) {
         towerDef.update(sim.simTime);
+      }
+      // Hybrid TD/RTS/FPS update. Only runs in td_rts_fps mode.
+      if (gameMode === 'td_rts_fps' && waveScheduler && commandSys && techTree) {
+        // Update friendlies (movement + attacks). Use current sim time.
+        for (const f of friendlies) {
+          // Apply global tech multipliers before update. We temporarily adjust range/damage/cooldown then restore.
+          const origRange = f.range;
+          const origDamage = f.damage;
+          const origCooldown = f.cooldown;
+          // Note: Friendly fields are readonly on range/damage/cooldown? Actually they are not read-only except damage is defined readonly? In class, range and damage are not readonly; we update them temporarily but revert.
+          (f as any).range = origRange * friendlyRangeBoost;
+          (f as any).damage = origDamage * friendlyDamageBoost;
+          (f as any).cooldown = origCooldown * friendlyCooldownMultiplier;
+          f.update(sim.simTime, sim.enemies);
+          // restore base stats
+          (f as any).range = origRange;
+          (f as any).damage = origDamage;
+          (f as any).cooldown = origCooldown;
+        }
+        // When a wave has been cleared (all enemies dead), waveScheduler switches to build phase.
+        waveScheduler.update();
+        // Award credits when enemies die. Compare previous alive count to current.
+        const aliveNow = sim.enemies.filter(e => e.alive).length;
+        const kills = Math.max(0, prevEnemyCount - aliveNow);
+        if (kills > 0) {
+          credits += kills * 10;
+        }
+        prevEnemyCount = aliveNow;
       }
 
       // Race mode: checkpoints + finish line.
