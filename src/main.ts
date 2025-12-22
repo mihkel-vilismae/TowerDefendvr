@@ -35,6 +35,9 @@ import { TechTree, defaultTechs } from './sim/techTree';
 import { PossessionState } from './sim/possession';
 import { initTdPanel } from './ui/tdPanel';
 import { createMainMenu } from './ui/mainMenu';
+import { isXRPresenting } from './xr/xrState';
+import { readVRStick, isVRButtonPressed } from './xr/vrInput';
+import { hookXRButtons } from './xr/xrBindings';
 
 // Refactor helpers
 import { clampArena as clampArenaWorld } from './world/bounds';
@@ -1096,7 +1099,7 @@ window.addEventListener('mousedown', (e) => {
 
 // Desktop mouse aiming (FPS Human): pointer lock + mouse look + left-click fire.
 function isMouseAimActive(): boolean {
-  if (isXR) return false;
+  if (isXRPresenting(renderer)) return false;
   if (!checkedOr(mouseAimChk, false)) return false;
   const choice = (vehicleSel.value as VehicleChoice) || 'sports';
   return choice === 'human' && !!player;
@@ -1339,48 +1342,15 @@ function stepHumanRoofConstraint() {
 }
 
 // --- VR input ---
-function readVRStick(): { steer: number; throttle: number; } {
-  const session = renderer.xr.getSession();
-  if (!session) return { steer: 0, throttle: 0 };
-  for (const src of session.inputSources) {
-    const gp = src.gamepad;
-    if (!gp) continue;
-    // Vive wands typically expose only 2 axes (trackpad), while many controllers
-    // expose 4 axes (2 sticks). Prefer 0/1 when only 2 are available.
-    const hasTwoAxes = gp.axes.length <= 2;
-    const axX = hasTwoAxes ? (gp.axes[0] ?? 0) : (gp.axes[2] ?? gp.axes[0] ?? 0);
-    const axY = hasTwoAxes ? (gp.axes[1] ?? 0) : (gp.axes[3] ?? gp.axes[1] ?? 0);
-    return { steer: axX, throttle: -axY };
-  }
-  return { steer: 0, throttle: 0 };
-}
-
-function isVRButtonPressed(buttonIndex: number): boolean {
-  const session = renderer.xr.getSession();
-  if (!session) return false;
-  for (const src of session.inputSources) {
-    const gp = src.gamepad;
-    if (!gp) continue;
-    const b = gp.buttons[buttonIndex];
-    if (b?.pressed) return true;
-  }
-  return false;
-}
-
-// Trigger fires MG; squeeze drops mine; A/X fires missile if locked
-function hookXRButtons() {
-  const onSelect = () => firePrimary();
-  const onSqueeze = () => {
-    // Human uses squeeze as bazooka; vehicles use squeeze as mine drop.
-    if (player && (vehicleSel.value as VehicleChoice) === 'human') fireBazooka();
-    else dropMine();
-  };
-  c1.addEventListener('selectstart', onSelect);
-  c1.addEventListener('squeezestart', onSqueeze);
-  c2.addEventListener('selectstart', onSelect);
-  c2.addEventListener('squeezestart', onSqueeze);
-}
-hookXRButtons();
+// Centralized XR controller bindings (keep main.ts smaller).
+hookXRButtons({
+  c1,
+  c2,
+  isHumanMode: () => !!player && (vehicleSel.value as VehicleChoice) === 'human',
+  firePrimary: () => firePrimary(),
+  fireBazooka: () => fireBazooka(),
+  dropMine: () => dropMine(),
+});
 
 
 function cycleHumanWeapon(): void {
@@ -2365,7 +2335,7 @@ if (!renderer.xr.isPresenting) {
   if (sim && player && targeting) {
     // Desktop input
     const isXR = renderer.xr.isPresenting;
-    const vr = readVRStick();
+    const vr = readVRStick(renderer);
     let accelerate = isXR ? vr.throttle > 0.2 : (key('KeyW') || key('ArrowUp'));
     let brake = isXR ? vr.throttle < -0.2 : (key('KeyS') || key('ArrowDown'));
     const left = isXR ? vr.steer < -0.2 : (key('KeyA') || key('ArrowLeft'));
@@ -2386,10 +2356,10 @@ if (!renderer.xr.isPresenting) {
         tryEnterBuildingRoof();
       }
       // Vive wand: trackpad press commonly maps to button index 2 in WebXR gamepads.
-      const vrEnterNow = isXR && isVRButtonPressed(2);
+      const vrEnterNow = isXR && isVRButtonPressed(renderer, 2);
       if (vrEnterNow && !vrEnterRoofPrev) tryEnterBuildingRoof();
       vrEnterRoofPrev = vrEnterNow;
-      const vrCycleNow = isXR && isVRButtonPressed(3);
+      const vrCycleNow = isXR && isVRButtonPressed(renderer, 3);
       if (vrCycleNow && !vrCycleWeaponPrev) cycleHumanWeapon();
       vrCycleWeaponPrev = vrCycleNow;
     } else {
