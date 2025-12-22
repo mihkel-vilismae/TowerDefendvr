@@ -266,6 +266,148 @@ export class RocketWeapon extends WeaponBase {
 }
 
 /**
+ * Bazooka: a slow, heavy single-shot rocket weapon.
+ *
+ * This is intentionally simple and deterministic: it reuses RocketWeapon's
+ * straight-line projectile logic, with tuned defaults for "big boom".
+ */
+export class BazookaWeapon extends RocketWeapon {
+  constructor(owner: Entity, cooldown = 1.1, ammo: number | null = 6, speed = 18, radius = 4.0, damage = 75) {
+    super(owner, cooldown, ammo, speed, radius, damage);
+  }
+}
+
+/**
+ * Grenade in flight. It travels for a short time, then explodes (splash).
+ * We keep it deterministic (no physics) by using a fixed travel time.
+ */
+export class GrenadeInstance {
+  position: Vector2;
+  velocity: Vector2;
+  fuse: number;
+  radius: number;
+  damage: number;
+  owner: Entity;
+  alive = true;
+
+  constructor(owner: Entity, position: Vector2, velocity: Vector2, fuse: number, radius: number, damage: number) {
+    this.owner = owner;
+    this.position = position.clone();
+    this.velocity = velocity.clone();
+    this.fuse = fuse;
+    this.radius = radius;
+    this.damage = damage;
+  }
+
+  update(dt: number, entities: Entity[]): void {
+    if (!this.alive) return;
+    this.fuse -= dt;
+    this.position.add(this.velocity.clone().scale(dt));
+    if (this.fuse > 0) return;
+    // explode
+    const r2 = this.radius * this.radius;
+    for (const e of entities) {
+      if (!e.alive) continue;
+      if (e === this.owner) continue;
+      const dx = e.car.position.x - this.position.x;
+      const dy = e.car.position.y - this.position.y;
+      if (dx * dx + dy * dy <= r2) {
+        e.takeDamage(this.damage);
+      }
+    }
+    this.alive = false;
+  }
+}
+
+/**
+ * Grenade launcher: lobs a grenade that explodes after a short fuse.
+ *
+ * Determinism: no arc simulation. Instead, grenade travels in a straight line
+ * and detonates after `fuse` seconds.
+ */
+export class GrenadeLauncher extends WeaponBase {
+  speed: number;
+  fuse: number;
+  radius: number;
+  damage: number;
+  grenades: GrenadeInstance[] = [];
+
+  constructor(owner: Entity, cooldown: number, ammo: number | null, speed: number, fuse: number, radius: number, damage: number) {
+    super(owner, cooldown, ammo);
+    this.speed = speed;
+    this.fuse = fuse;
+    this.radius = radius;
+    this.damage = damage;
+  }
+
+  fire(simTime: number, target: Entity): void {
+    if (!this.canFire(simTime)) return;
+    this.lastFireTime = simTime;
+    if (this.ammo !== null) this.ammo!--;
+
+    const dir = Vector2.fromAngle(this.owner.car.heading);
+    const pos = this.owner.car.position.clone().add(dir.clone().scale(1.5));
+    const vel = dir.clone().scale(this.speed);
+    this.grenades.push(new GrenadeInstance(this.owner, pos, vel, this.fuse, this.radius, this.damage));
+  }
+
+  updateGrenades(dt: number, entities: Entity[]): void {
+    for (let i = this.grenades.length - 1; i >= 0; i--) {
+      const g = this.grenades[i];
+      g.update(dt, entities);
+      if (!g.alive) this.grenades.splice(i, 1);
+    }
+  }
+}
+
+/**
+ * Flamethrower: close-range cone damage.
+ *
+ * Note: This is implemented as an instant "spray" to keep the sim cheap.
+ * Callers that want multi-target behaviour should use `spray(...)`.
+ */
+export class FlamethrowerWeapon extends WeaponBase {
+  range: number;
+  cone: number;
+  damage: number;
+
+  constructor(owner: Entity, cooldown: number, ammo: number | null, range: number, cone: number, damage: number) {
+    super(owner, cooldown, ammo);
+    this.range = range;
+    this.cone = cone;
+    this.damage = damage;
+  }
+
+  spray(simTime: number, entities: Entity[]): void {
+    if (!this.canFire(simTime)) return;
+    this.lastFireTime = simTime;
+    if (this.ammo !== null) this.ammo!--;
+
+    const forward = Vector2.fromAngle(this.owner.car.heading);
+    const maxR2 = this.range * this.range;
+    for (const e of entities) {
+      if (!e.alive) continue;
+      if (e === this.owner) continue;
+      const dx = e.car.position.x - this.owner.car.position.x;
+      const dy = e.car.position.y - this.owner.car.position.y;
+      const d2 = dx * dx + dy * dy;
+      if (d2 > maxR2) continue;
+      const dirTo = new Vector2(dx, dy).normalize();
+      const dot = forward.x * dirTo.x + forward.y * dirTo.y;
+      const angle = Math.acos(Math.min(Math.max(dot, -1), 1));
+      if (angle <= this.cone / 2) {
+        e.takeDamage(this.damage);
+      }
+    }
+  }
+
+  fire(simTime: number, target: Entity): void {
+    // Backwards-compatible: if caller uses fire(), treat it as a single-target attempt.
+    this.spray(simTime, [target]);
+  }
+}
+
+/**
  * EMP weapon: radial effect that slows/disables enemies for a duration.
  */
 export class EMPWeapon extends WeaponBase {
@@ -303,7 +445,6 @@ export class EMPWeapon extends WeaponBase {
   }
 }
 
-/**
  * Homing missile weapon: spawns a MissileInstance that steers toward target.
  */
 export class HomingMissileWeapon extends WeaponBase {

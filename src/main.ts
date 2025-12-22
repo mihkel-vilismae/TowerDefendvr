@@ -7,7 +7,7 @@ import { XRControllerModelFactory } from 'three/examples/jsm/webxr/XRControllerM
 
 import { Car } from './game/car';
 import { Entity, Enemy, Onlooker } from './sim/entities';
-import { MachineGun, AntiMaterielRifle, MineWeapon, HomingMissileWeapon, StingerWeapon, RocketWeapon, Shotgun, EMPWeapon, Minigun, AirstrikeWeapon } from './sim/weapons';
+import { MachineGun, AntiMaterielRifle, MineWeapon, HomingMissileWeapon, StingerWeapon, RocketWeapon, Shotgun, EMPWeapon, Minigun, BazookaWeapon, GrenadeLauncher, FlamethrowerWeapon, AirstrikeWeapon } from './sim/weapons';
 import { HealthPickup, AmmoPickup, ShieldPickup, ScorePickup, WeaponPickup } from './sim/pickups';
 import { GameSimulation, OnlookerKillRule, AirstrikeInstance } from './sim/game';
 import { TargetingSystem } from './sim/targeting';
@@ -930,11 +930,17 @@ function attachHumanLoadout(ent: Entity) {
   // Human weapons are cycled with middle mouse (desktop) or a VR button.
   // 0) Anti-materiel rifle: slow cadence, huge damage, long range.
   ent.weapons.push(new AntiMaterielRifle(ent, 0.55, null, 120, 34));
-  // 1) Carbine/SMG: faster, lower damage, good for soft targets.
+  // 1) Carbine: reliable hitscan.
   ent.weapons.push(new MachineGun(ent, 0.11, null, 40, 6));
-  // 2) Bazooka: dumb rocket with a chunky, mostly-spark explosion.
-  ent.weapons.push(new RocketWeapon(ent, 1.25, 18, 22, 3.4, 70));
-  // 3) Stinger: lock-on anti-air missile. Intended for enemy helicopters.
+  // 2) Minigun: close-mid range bullet hose.
+  ent.weapons.push(new Minigun(ent, 0.035, null, 34, 3));
+  // 3) Bazooka: slow, heavy rocket.
+  ent.weapons.push(new BazookaWeapon(ent, 1.1, 8, 18, 4.0, 75));
+  // 4) Grenade launcher: timed splash.
+  ent.weapons.push(new GrenadeLauncher(ent, 0.9, 14, 16, 0.75, 3.5, 40));
+  // 5) Flamethrower: very short range cone.
+  ent.weapons.push(new FlamethrowerWeapon(ent, 0.06, null, 9.5, Math.PI / 3.2, 2));
+  // 6) Stinger: lock-on anti-air missile. Intended for enemy helicopters.
   ent.weapons.push(new StingerWeapon(ent, 2.15, 6, 36, 4.8, 2.4, 110));
 }
 
@@ -1367,7 +1373,10 @@ function currentHumanWeaponName(): string {
   if (!w) return '';
   if (w instanceof AntiMaterielRifle) return 'Anti-materiel rifle';
   if (w instanceof StingerWeapon) return 'Stinger (AA)';
-  if (w instanceof RocketWeapon) return 'Bazooka';
+  if (w instanceof BazookaWeapon || w instanceof RocketWeapon) return 'Bazooka';
+  if (w instanceof GrenadeLauncher) return 'Grenade launcher';
+  if (w instanceof FlamethrowerWeapon) return 'Flamethrower';
+  if (w instanceof Minigun) return 'Minigun';
   if (w instanceof MachineGun) return 'Carbine';
   return 'Weapon';
 }
@@ -1412,6 +1421,24 @@ function fireHumanWeapon(): void {
   if (w instanceof RocketWeapon) {
     // Bazooka is treated as a short-range rocket.
     fireBazooka();
+    return;
+  }
+
+  if (w instanceof GrenadeLauncher) {
+    w.fire(sim.simTime, target);
+    // Light tracer hint toward the aim target.
+    spawnTracer(player.car.position.x, player.car.position.y, target.car.position.x, target.car.position.y, 'rocket');
+    particles.setColor(WEAPON_VFX.rocket.impactColor);
+    particles.spawnExplosion(new THREE.Vector3(player.car.position.x, getEntityBaseY(player) + 0.35, player.car.position.y), 0.03 * EXPLOSION_INTENSITY_SCALE);
+    particles.setColor(DEFAULT_PARTICLE_COLOR);
+    return;
+  }
+
+  if (w instanceof FlamethrowerWeapon) {
+    w.spray(sim.simTime, getTargetsSorted());
+    particles.setColor(WEAPON_VFX.machinegun.impactColor);
+    particles.spawnExplosion(new THREE.Vector3(player.car.position.x, getEntityBaseY(player) + 0.33, player.car.position.y), 0.02 * EXPLOSION_INTENSITY_SCALE);
+    particles.setColor(DEFAULT_PARTICLE_COLOR);
     return;
   }
 
@@ -1565,9 +1592,9 @@ function fireRocket() {
 }
 
 function fireBazooka() {
-  // Bazooka = RocketWeapon in human mode.
   if (!sim || !player) return;
-  const rw = getWeapon(RocketWeapon);
+  // Prefer BazookaWeapon, fall back to RocketWeapon for backwards compatibility.
+  const rw = (getWeapon(BazookaWeapon) as any) ?? getWeapon(RocketWeapon);
   const t = targeting?.getTarget() ?? (getTargetsSorted()[0] ?? null);
   if (!rw || !t) return;
   rw.fire(sim.simTime, t);

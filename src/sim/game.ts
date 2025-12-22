@@ -1,6 +1,6 @@
 import { Car } from '../game/car';
 import { Enemy, Onlooker, Entity } from './entities';
-import { MachineGun, MineWeapon, HomingMissileWeapon, RocketWeapon, Shotgun, EMPWeapon } from './weapons';
+import { MachineGun, MineWeapon, HomingMissileWeapon, RocketWeapon, GrenadeLauncher, Shotgun, EMPWeapon } from './weapons';
 import { Pickup, HealthPickup, AmmoPickup, ShieldPickup, ScorePickup, WeaponPickup } from './pickups';
 import { Vector2 } from '../game/vector2';
 
@@ -86,19 +86,28 @@ export class GameSimulation {
   private mineWeapons: MineWeapon[] = [];
   private homingWeapons: HomingMissileWeapon[] = [];
   private rocketWeapons: RocketWeapon[] = [];
+  private grenadeLaunchers: GrenadeLauncher[] = [];
 
   constructor(player: Entity, options: GameOptions) {
     this.player = player;
     this.options = options;
+
+    // Track player weapons that require per-tick updates (projectiles/mines).
+    this.indexWeapons(player);
+  }
+
+  private indexWeapons(owner: Entity): void {
+    for (const w of owner.weapons) {
+      if (w instanceof MineWeapon) this.mineWeapons.push(w);
+      else if (w instanceof HomingMissileWeapon) this.homingWeapons.push(w);
+      else if (w instanceof RocketWeapon) this.rocketWeapons.push(w);
+      else if (w instanceof GrenadeLauncher) this.grenadeLaunchers.push(w);
+    }
   }
 
   addEnemy(enemy: Enemy): void {
     this.enemies.push(enemy);
-    for (const w of enemy.weapons) {
-      if (w instanceof MineWeapon) this.mineWeapons.push(w);
-      else if (w instanceof HomingMissileWeapon) this.homingWeapons.push(w);
-      else if (w instanceof RocketWeapon) this.rocketWeapons.push(w);
-    }
+    this.indexWeapons(enemy);
   }
 
   /**
@@ -149,6 +158,9 @@ export class GameSimulation {
     }
     for (const rw of this.rocketWeapons) {
       rw.updateRockets(dt);
+    }
+    for (const gl of this.grenadeLaunchers) {
+      gl.updateGrenades(dt, entitiesAll);
     }
 
     // 3b. Update airstrikes
