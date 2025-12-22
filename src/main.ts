@@ -35,6 +35,11 @@ import { TechTree, defaultTechs } from './sim/techTree';
 import { PossessionState } from './sim/possession';
 import { initTdPanel } from './ui/tdPanel';
 
+// Refactor helpers
+import { clampArena as clampArenaWorld } from './world/bounds';
+import { applyDefaultLighting } from './world/lighting';
+import { createFriendlyMesh as createFriendlyMeshRender, syncFriendlyVisualPositions } from './renderSync/friendlyVisuals';
+
 type VehicleChoice = 'sports' | 'muscle' | 'buggy' | 'tank' | 'heli' | 'human';
 
 const app = document.getElementById('app')!;
@@ -429,24 +434,8 @@ window.addEventListener('keydown', (ev) => {
 });
 
 // Lights
-// Stronger sunlight and a higher position makes the environment brighter and more dynamic.
-const sun = new THREE.DirectionalLight(0xffffff, 2.2);
-sun.position.set(100, 200, 100);
-sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
-sun.shadow.camera.near = 1;
-sun.shadow.camera.far = 240;
-sun.shadow.camera.left = -90;
-sun.shadow.camera.right = 90;
-sun.shadow.camera.top = 90;
-sun.shadow.camera.bottom = -90;
-scene.add(sun);
-
-// Replace ambient light with a hemisphere light for softer, more natural lighting. Set the intensity
-// higher to brighten shaded areas. The sky color is tinted slightly blue and the ground slightly
-// darker to help differentiate up/down cues.
-const hemiLight = new THREE.HemisphereLight(0xbfcfff, 0x1a2538, 1.25);
-scene.add(hemiLight);
+// Kept in a module so main.ts stays focused on orchestration.
+const { sun, hemi: hemiLight } = applyDefaultLighting(scene);
 
 // Arena + tabletop root
 const tabletop = new TabletopRig();
@@ -485,52 +474,9 @@ let unlockedTypes: FriendlyType[] = ['auto', 'sniper', 'emp', 'trooper'];
 // Track enemy count from previous update to award credits when kills occur.
 let prevEnemyCount = 0;
 
-// Create a simple mesh for each friendly unit type. Colours hint at their role.
+// Create a simple mesh for each friendly unit type. Kept in renderSync so main.ts stays smaller.
 function createFriendlyMesh(f: Friendly): THREE.Object3D {
-  let mesh: THREE.Mesh;
-  switch (f.type) {
-    case 'auto':
-      mesh = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.4, 0.4, 1.2, 10),
-        new THREE.MeshStandardMaterial({ color: 0x4df3ff, emissive: 0x4df3ff, emissiveIntensity: 0.6, roughness: 0.4, metalness: 0.2 })
-      );
-      break;
-    case 'sniper':
-      mesh = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.35, 0.35, 1.4, 12),
-        new THREE.MeshStandardMaterial({ color: 0xff7cff, emissive: 0xff7cff, emissiveIntensity: 0.5, roughness: 0.4, metalness: 0.2 })
-      );
-      break;
-    case 'emp':
-      mesh = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.5, 0.5, 0.8, 8),
-        new THREE.MeshStandardMaterial({ color: 0x7cfffa, emissive: 0x7cfffa, emissiveIntensity: 0.5, roughness: 0.5, metalness: 0.2 })
-      );
-      break;
-    case 'trooper':
-      // Trooper squads are represented by a slightly taller prism.
-      mesh = new THREE.Mesh(
-        new THREE.BoxGeometry(0.6, 1.0, 0.6),
-        new THREE.MeshStandardMaterial({ color: 0xffc86b, emissive: 0xffc86b, emissiveIntensity: 0.45, roughness: 0.6, metalness: 0.15 })
-      );
-      break;
-    case 'missile':
-      mesh = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.5, 0.5, 1.5, 10),
-        new THREE.MeshStandardMaterial({ color: 0xff6058, emissive: 0xff6058, emissiveIntensity: 0.6, roughness: 0.35, metalness: 0.25 })
-      );
-      break;
-    default:
-      mesh = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.4, 0.4, 1.2, 10),
-        new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 0.3 })
-      );
-  }
-  mesh.castShadow = true;
-  mesh.receiveShadow = true;
-  // Elevated slightly so it sits above the ground
-  mesh.position.set(f.position.x, 0.6, f.position.y);
-  return mesh;
+  return createFriendlyMeshRender(f);
 }
 
 // Add a friendly unit to the game world and create its visual representation.
@@ -551,11 +497,7 @@ function clearFriendlyVisuals(): void {
 
 // Update positions of friendly visuals to match simulation coordinates.
 function updateFriendlyVisuals(): void {
-  for (const [f, mesh] of friendlyVisuals) {
-    mesh.position.x = f.position.x;
-    mesh.position.z = f.position.y;
-    // Keep Y constant; troopers could perhaps tilt but we ignore for simplicity.
-  }
+  syncFriendlyVisualPositions(friendlyVisuals);
 }
 
 function rebuildArena(): void {
@@ -1502,13 +1444,8 @@ function getHeliTargetsSorted(): Entity[] {
 }
 
 function clampArena(ent: Entity) {
-  // Adjust the arena clamp to the larger world. When the world size was doubled, the
-  // playable bounds also needed to expand so the player doesn't collide with
-  // invisible walls prematurely. Walls now sit roughly at ±110 units, so use
-  // a slightly smaller value to keep the camera within the walls.
-  const lim = 106;
-  ent.car.position.x = THREE.MathUtils.clamp(ent.car.position.x, -lim, lim);
-  ent.car.position.y = THREE.MathUtils.clamp(ent.car.position.y, -lim, lim);
+  // Delegate to world/bounds module. Keep behavior identical.
+  clampArenaWorld(ent);
 }
 
 // --- Human rooftop system ---
@@ -2648,7 +2585,7 @@ if (!renderer.xr.isPresenting) {
       const effectiveDt = fixedDt * (player.moveScale ?? 1);
       const prevPos = player.car.position.clone();
       player.car.update(effectiveDt, input);
-      clampArena(player);
+      clampArenaWorld(player);
       if (choice === 'human') stepHumanRoofConstraint();
       sim.update(fixedDt);
 
