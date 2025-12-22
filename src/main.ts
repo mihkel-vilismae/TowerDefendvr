@@ -161,6 +161,193 @@ const lapsSel = requireEl<HTMLSelectElement>('#lapsSel');
 const startHpSlider = el<HTMLInputElement>('#startHp');
 const startHpLabel = el<HTMLSpanElement>('#startHpLabel');
 
+// ---------------- Main menu (start gate) ----------------
+// The in-game control panel remains available after starting, but the user flow
+// now begins with a simple main menu overlay.
+type MainMenuMode = 'td_rts_fps' | 'arena';
+
+function ensureMainMenu() {
+  let overlay = document.getElementById('mainMenuOverlay') as HTMLDivElement | null;
+  if (overlay) return overlay;
+
+  overlay = document.createElement('div');
+  overlay.id = 'mainMenuOverlay';
+  overlay.style.position = 'fixed';
+  overlay.style.inset = '0';
+  overlay.style.zIndex = '9999';
+  overlay.style.display = 'flex';
+  overlay.style.alignItems = 'center';
+  overlay.style.justifyContent = 'center';
+  overlay.style.background = 'rgba(10, 12, 16, 0.92)';
+  overlay.style.backdropFilter = 'blur(6px)';
+
+  const card = document.createElement('div');
+  card.style.width = 'min(560px, 92vw)';
+  card.style.padding = '22px';
+  card.style.borderRadius = '14px';
+  card.style.background = 'rgba(18, 22, 30, 0.92)';
+  card.style.border = '1px solid rgba(255,255,255,0.08)';
+  card.style.boxShadow = '0 18px 60px rgba(0,0,0,0.45)';
+  card.style.color = '#fff';
+  card.style.fontFamily = 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
+
+  const title = document.createElement('div');
+  title.textContent = 'Death Rally';
+  title.style.fontSize = '28px';
+  title.style.fontWeight = '700';
+  title.style.letterSpacing = '0.4px';
+  title.style.marginBottom = '8px';
+
+  const subtitle = document.createElement('div');
+  subtitle.textContent = 'Choose a mode to start';
+  subtitle.style.opacity = '0.8';
+  subtitle.style.marginBottom = '18px';
+
+  const btnRow = document.createElement('div');
+  btnRow.style.display = 'grid';
+  btnRow.style.gridTemplateColumns = '1fr';
+  btnRow.style.gap = '10px';
+
+  function mkBtn(label: string) {
+    const b = document.createElement('button');
+    b.textContent = label;
+    b.style.padding = '12px 14px';
+    b.style.borderRadius = '10px';
+    b.style.border = '1px solid rgba(255,255,255,0.12)';
+    b.style.background = 'rgba(255,255,255,0.06)';
+    b.style.color = '#fff';
+    b.style.fontSize = '16px';
+    b.style.cursor = 'pointer';
+    b.onmouseenter = () => (b.style.background = 'rgba(255,255,255,0.10)');
+    b.onmouseleave = () => (b.style.background = 'rgba(255,255,255,0.06)');
+    return b;
+  }
+
+  const startTd = mkBtn('Start Tower Defence');
+  const startDefault = mkBtn('Start Default Mode');
+  const showTech = mkBtn('Show Tech Tree');
+
+  btnRow.appendChild(startTd);
+  btnRow.appendChild(startDefault);
+  btnRow.appendChild(showTech);
+
+  const footer = document.createElement('div');
+  footer.style.marginTop = '14px';
+  footer.style.opacity = '0.65';
+  footer.style.fontSize = '12px';
+  footer.textContent = 'Tip: You can still use the in-game panel after starting.';
+
+  card.appendChild(title);
+  card.appendChild(subtitle);
+  card.appendChild(btnRow);
+  card.appendChild(footer);
+  overlay.appendChild(card);
+  document.body.appendChild(overlay);
+
+  function hideMenu() {
+    overlay!.style.display = 'none';
+    const controls = document.getElementById('controls');
+    if (controls) controls.style.display = '';
+  }
+
+  function start(mode: MainMenuMode) {
+    modeSel.value = mode;
+    // Reuse existing start flow to preserve behavior.
+    startBtn.click();
+    hideMenu();
+  }
+
+  function showTechTreeModal() {
+    const existing = document.getElementById('techTreeModal');
+    if (existing) existing.remove();
+
+    const modal = document.createElement('div');
+    modal.id = 'techTreeModal';
+    modal.style.position = 'fixed';
+    modal.style.inset = '0';
+    modal.style.zIndex = '10000';
+    modal.style.display = 'flex';
+    modal.style.alignItems = 'center';
+    modal.style.justifyContent = 'center';
+    modal.style.background = 'rgba(0,0,0,0.6)';
+
+    const panel = document.createElement('div');
+    panel.style.width = 'min(780px, 94vw)';
+    panel.style.maxHeight = 'min(80vh, 720px)';
+    panel.style.overflow = 'auto';
+    panel.style.padding = '18px';
+    panel.style.borderRadius = '14px';
+    panel.style.background = 'rgba(18, 22, 30, 0.96)';
+    panel.style.border = '1px solid rgba(255,255,255,0.10)';
+    panel.style.color = '#fff';
+
+    const head = document.createElement('div');
+    head.style.display = 'flex';
+    head.style.justifyContent = 'space-between';
+    head.style.alignItems = 'center';
+    head.style.marginBottom = '12px';
+    const h = document.createElement('div');
+    h.textContent = 'Tech Tree (Preview)';
+    h.style.fontWeight = '700';
+    h.style.fontSize = '18px';
+    const close = mkBtn('Close');
+    close.style.padding = '8px 10px';
+    close.style.fontSize = '14px';
+    close.onclick = () => modal.remove();
+    head.appendChild(h);
+    head.appendChild(close);
+
+    const list = document.createElement('div');
+    list.style.display = 'grid';
+    list.style.gridTemplateColumns = '1fr';
+    list.style.gap = '8px';
+
+    // Use the live techTree when available, otherwise show the default definitions.
+    const tmpTree = techTree ?? new TechTree(defaultTechs);
+    for (const t of tmpTree.getAllTechs()) {
+      const row = document.createElement('div');
+      row.style.padding = '10px 12px';
+      row.style.borderRadius = '10px';
+      row.style.border = '1px solid rgba(255,255,255,0.08)';
+      row.style.background = 'rgba(255,255,255,0.04)';
+
+      const name = document.createElement('div');
+      name.textContent = `${t.name}  (cost: ${t.cost})`;
+      name.style.fontWeight = '600';
+
+      const prereq = document.createElement('div');
+      prereq.style.opacity = '0.75';
+      prereq.style.fontSize = '12px';
+      prereq.textContent = t.prereqs.length ? `Requires: ${t.prereqs.join(', ')}` : 'Requires: —';
+
+      row.appendChild(name);
+      row.appendChild(prereq);
+      list.appendChild(row);
+    }
+
+    panel.appendChild(head);
+    panel.appendChild(list);
+    modal.appendChild(panel);
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) modal.remove();
+    });
+    document.body.appendChild(modal);
+  }
+
+  startTd.onclick = () => start('td_rts_fps');
+  startDefault.onclick = () => start('arena');
+  showTech.onclick = () => showTechTreeModal();
+
+  return overlay;
+}
+
+function showMainMenu() {
+  const o = ensureMainMenu();
+  o.style.display = 'flex';
+  const controls = document.getElementById('controls');
+  if (controls) controls.style.display = 'none';
+}
+
 // District preset (world generation)
 const savedDistrict = (localStorage.getItem('deathrally.district') as DistrictPreset | null) ?? 'mixed';
 districtSel.value = savedDistrict;
@@ -2423,3 +2610,5 @@ window.addEventListener('resize', () => {
 
 // boot
 updateHUD();
+// Start at a clean main menu. Game begins only after selecting a start option.
+showMainMenu();
