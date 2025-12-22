@@ -445,6 +445,7 @@ export class EMPWeapon extends WeaponBase {
   }
 }
 
+/**
  * Homing missile weapon: spawns a MissileInstance that steers toward target.
  */
 export class HomingMissileWeapon extends WeaponBase {
