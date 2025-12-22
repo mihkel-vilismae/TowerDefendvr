@@ -156,6 +156,8 @@ const vehicleSel = requireEl<HTMLSelectElement>('#vehicleSel');
 const bloomToggle = el<HTMLInputElement>('#bloomToggle');
 const slowmoToggle = el<HTMLInputElement>('#slowmoToggle');
 const enemyHeliToggle = el<HTMLInputElement>('#enemyHeliToggle');
+const mouseAimChk = el<HTMLInputElement>('#mouseAimChk');
+const mouseAimStatus = el<HTMLElement>('#mouseAimStatus');
 const modeSel = requireEl<HTMLSelectElement>('#modeSel');
 const lapsSel = requireEl<HTMLSelectElement>('#lapsSel');
 const startHpSlider = el<HTMLInputElement>('#startHp');
@@ -1005,6 +1007,20 @@ onChange(slowmoToggle, () => {
   timeScale = checkedOr(slowmoToggle, false) ? 0.35 : 1;
 });
 
+// Mouse aiming (FPS) toggle UI
+function syncMouseAimUi() {
+  if (!mouseAimStatus) return;
+  mouseAimStatus.textContent = checkedOr(mouseAimChk, false) ? 'Mouse aiming: ON' : 'Mouse aiming: OFF';
+}
+syncMouseAimUi();
+onChange(mouseAimChk, () => {
+  syncMouseAimUi();
+  // If disabled while pointer-locked, exit pointer lock.
+  if (!checkedOr(mouseAimChk, false) && document.pointerLockElement === renderer.domElement) {
+    document.exitPointerLock().catch(() => {});
+  }
+});
+
 // Start HP slider
 if (startHpSlider && startHpLabel) {
   const sync = () => {
@@ -1297,6 +1313,42 @@ window.addEventListener('mousedown', (e) => {
   e.preventDefault();
 });
 
+// Desktop mouse aiming (FPS Human): pointer lock + mouse look + left-click fire.
+function isMouseAimActive(): boolean {
+  if (isXR) return false;
+  if (!checkedOr(mouseAimChk, false)) return false;
+  const choice = (vehicleSel.value as VehicleChoice) || 'sports';
+  return choice === 'human' && !!player;
+}
+
+document.addEventListener('pointerlockchange', () => {
+  mouseAimPointerLocked = (document.pointerLockElement === renderer.domElement);
+});
+
+document.addEventListener('mousemove', (e) => {
+  if (!isMouseAimActive() || !mouseAimPointerLocked) return;
+  mouseAimYaw += e.movementX * mouseAimSensitivity;
+  mouseAimPitch -= e.movementY * mouseAimSensitivity;
+  mouseAimPitch = Math.max(-mouseAimPitchClamp, Math.min(mouseAimPitchClamp, mouseAimPitch));
+});
+
+// Request pointer lock on left click on the canvas. If already locked, fire.
+renderer.domElement.addEventListener('mousedown', (e) => {
+  if (e.button !== 0) return;
+  if (!isMouseAimActive()) return;
+  // Do not lock when clicking UI.
+  const target = e.target as HTMLElement;
+  if (target.closest('#panel') || target.closest('#hud') || target.closest('#minimap') || target.closest('#mainMenu')) return;
+  if (document.pointerLockElement !== renderer.domElement) {
+    renderer.domElement.requestPointerLock?.();
+    e.preventDefault();
+    return;
+  }
+  // Already locked: left-click fires.
+  fireHumanWeaponMouseAim();
+  e.preventDefault();
+});
+
 // --- TD-RTS-FPS mode input handlers (desktop) ---
 // Convert screen coordinates to world (simulation) coordinates on the ground plane (y=0).
 function screenToWorld(clientX: number, clientY: number): { x: number; y: number; } | null {
@@ -1390,6 +1442,49 @@ let lockProgress = 0;
 
 // Human weapon cycling (desktop: middle mouse; VR: button)
 let humanWeaponIndex = 0;
+
+// --- Desktop mouse aiming (FPS Human) ---
+let mouseAimYaw = 0; // radians in world space
+let mouseAimPitch = 0; // radians (clamped)
+let mouseAimPointerLocked = false;
+const mouseAimSensitivity = 0.0022;
+const mouseAimPitchClamp = Math.PI * 0.47; // ~85 deg
+
+// Simple FPS gun + muzzle flash (camera-attached, desktop only)
+const fpsGunRoot = new THREE.Group();
+fpsGunRoot.name = 'fpsGunRoot';
+const fpsGun = new THREE.Group();
+{
+  const body = new THREE.Mesh(
+    new THREE.BoxGeometry(0.18, 0.12, 0.45),
+    new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.55, metalness: 0.25 })
+  );
+  body.position.set(0, -0.08, -0.35);
+  const barrel = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.025, 0.025, 0.28, 10),
+    new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.45, metalness: 0.35 })
+  );
+  barrel.rotation.x = Math.PI * 0.5;
+  barrel.position.set(0.06, -0.06, -0.56);
+  const grip = new THREE.Mesh(
+    new THREE.BoxGeometry(0.09, 0.16, 0.14),
+    new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.6, metalness: 0.15 })
+  );
+  grip.position.set(0.05, -0.18, -0.28);
+  fpsGun.add(body, barrel, grip);
+}
+// Muzzle flash mesh (briefly visible)
+const fpsMuzzleFlash = new THREE.Mesh(
+  new THREE.SphereGeometry(0.06, 10, 10),
+  new THREE.MeshStandardMaterial({ color: 0xfff1b8, emissive: 0xffc04a, emissiveIntensity: 2.0, roughness: 0.2, metalness: 0.0, transparent: true, opacity: 0.95 })
+);
+fpsMuzzleFlash.position.set(0.06, -0.06, -0.67);
+fpsMuzzleFlash.visible = false;
+fpsGun.add(fpsMuzzleFlash);
+fpsGunRoot.add(fpsGun);
+camera.add(fpsGunRoot);
+fpsGunRoot.visible = false;
+let fpsMuzzleFlashFramesLeft = 0;
 let vrCycleWeaponPrev = false;
 
 let locked = false;
@@ -1594,6 +1689,71 @@ function fireHumanWeapon(): void {
   }
 }
 
+function getMouseAimedTarget(candidates: Entity[]): Entity | null {
+  if (!player) return null;
+  if (candidates.length === 0) return null;
+  const px = player.car.position.x;
+  const pz = player.car.position.y;
+  // Forward direction from mouse aim yaw (on XZ plane)
+  const fx = Math.cos(mouseAimYaw);
+  const fz = Math.sin(mouseAimYaw);
+  let best: Entity | null = null;
+  let bestScore = -Infinity;
+  for (const c of candidates) {
+    if (!c.alive) continue;
+    const dx = c.car.position.x - px;
+    const dz = c.car.position.y - pz;
+    const d2 = dx * dx + dz * dz;
+    if (d2 < 0.001) continue;
+    const invLen = 1 / Math.sqrt(d2);
+    const nx = dx * invLen;
+    const nz = dz * invLen;
+    const dot = nx * fx + nz * fz; // [-1..1]
+    // Prefer targets near the center of aim and closer distance.
+    const score = dot * 2.0 - Math.sqrt(d2) * 0.01;
+    if (score > bestScore) {
+      bestScore = score;
+      best = c;
+    }
+  }
+  // Require target to be generally in front
+  if (bestScore < 0.25) return null;
+  return best;
+}
+
+function triggerFpsMuzzleFlash(): void {
+  fpsMuzzleFlashFramesLeft = 2;
+  fpsMuzzleFlash.visible = true;
+}
+
+function fireHumanWeaponMouseAim(): void {
+  if (!sim || !player) return;
+  const w = player.weapons[humanWeaponIndex];
+  if (!w) return;
+  // Only override aiming for hitscan weapons to keep the change minimal.
+  if (w instanceof AntiMaterielRifle) {
+    const candidates = getTargetsSorted();
+    const target = getMouseAimedTarget(candidates);
+    if (!target) return;
+    w.fire(sim.simTime, target);
+    spawnTracer(player.car.position.x, player.car.position.y, target.car.position.x, target.car.position.y, 'antimateriel');
+    triggerFpsMuzzleFlash();
+    return;
+  }
+  if (w instanceof MachineGun) {
+    const candidates = getTargetsSorted();
+    const target = getMouseAimedTarget(candidates);
+    if (!target) return;
+    w.fire(sim.simTime, target);
+    spawnTracer(player.car.position.x, player.car.position.y, target.car.position.x, target.car.position.y, 'machinegun');
+    triggerFpsMuzzleFlash();
+    return;
+  }
+  // For other weapons (bazooka / stinger), fall back to existing targeting logic.
+  fireHumanWeapon();
+  triggerFpsMuzzleFlash();
+}
+
 function spawnTracer(startX: number, startY: number, endX: number, endY: number, key: keyof typeof WEAPON_VFX) {
   // Render a short-lived line segment so bullets are clearly visible.
   const style = WEAPON_VFX[key];
@@ -1739,6 +1899,9 @@ function resetWorld() {
 
   const choice = (vehicleSel.value as VehicleChoice) || 'sports';
   player = makePlayer(choice);
+  // Initialize desktop mouse aim to current heading for a stable first lock.
+  mouseAimYaw = player.car.heading;
+  mouseAimPitch = 0;
   // reset rooftop state every restart
   setHumanRoofState(false, null);
   // Respect mode selection for all supported game modes.
@@ -2382,13 +2545,34 @@ function step(now: number) {
 
     // camera + render
     
+    // FPS gun visible only for desktop Human mode.
+    if (!renderer.xr.isPresenting) {
+      const choiceNow = (vehicleSel.value as VehicleChoice) || 'sports';
+      fpsGunRoot.visible = (choiceNow === 'human');
+    } else {
+      fpsGunRoot.visible = false;
+    }
+
+    // Muzzle flash lifetime (1–2 frames)
+    if (fpsMuzzleFlashFramesLeft > 0) {
+      fpsMuzzleFlashFramesLeft--;
+      if (fpsMuzzleFlashFramesLeft <= 0) fpsMuzzleFlash.visible = false;
+    }
+
 if (!renderer.xr.isPresenting) {
       const px = player.car.position.x;
       const pz = player.car.position.y;
       const choiceNow = (vehicleSel.value as VehicleChoice) || 'sports';
       if (choiceNow === 'human') {
         const eye = new THREE.Vector3(px, getEntityBaseY(player) + 1.55, pz);
-        const f = new THREE.Vector3(Math.cos(player.car.heading), 0, Math.sin(player.car.heading));
+        // If mouse aiming is enabled + pointer locked, use mouse yaw/pitch for view direction.
+        const yaw = (isMouseAimActive() && mouseAimPointerLocked) ? mouseAimYaw : player.car.heading;
+        const pitch = (isMouseAimActive() && mouseAimPointerLocked) ? mouseAimPitch : 0;
+        const f = new THREE.Vector3(
+          Math.cos(yaw) * Math.cos(pitch),
+          Math.sin(pitch),
+          Math.sin(yaw) * Math.cos(pitch)
+        );
         camera.position.lerp(eye, 0.25);
         camera.lookAt(eye.clone().add(f.multiplyScalar(3)));
       } else {
@@ -2577,13 +2761,29 @@ if (!renderer.xr.isPresenting) {
 
   // Desktop camera: playable view with toggleable top/chase mode + mouse wheel zoom.
   
-if (player && !renderer.xr.isPresenting) {
+  // Desktop camera: playable view.
+  if (player && !renderer.xr.isPresenting) {
     const px = player.car.position.x;
     const pz = player.car.position.y;
     const choiceNow = (vehicleSel.value as VehicleChoice) || 'sports';
+    // FPS gun visible only for desktop Human mode.
+    fpsGunRoot.visible = (choiceNow === 'human');
+
+    // Muzzle flash lifetime (1–2 frames)
+    if (fpsMuzzleFlashFramesLeft > 0) {
+      fpsMuzzleFlashFramesLeft--;
+      if (fpsMuzzleFlashFramesLeft <= 0) fpsMuzzleFlash.visible = false;
+    }
     if (choiceNow === 'human') {
       const eye = new THREE.Vector3(px, getEntityBaseY(player) + 1.55, pz);
-      const f = new THREE.Vector3(Math.cos(player.car.heading), 0, Math.sin(player.car.heading));
+      // If mouse aiming is enabled + pointer locked, use mouse yaw/pitch for view direction.
+      const yaw = (isMouseAimActive() && mouseAimPointerLocked) ? mouseAimYaw : player.car.heading;
+      const pitch = (isMouseAimActive() && mouseAimPointerLocked) ? mouseAimPitch : 0;
+      const f = new THREE.Vector3(
+        Math.cos(yaw) * Math.cos(pitch),
+        Math.sin(pitch),
+        Math.sin(yaw) * Math.cos(pitch)
+      );
       camera.position.lerp(eye, 0.25);
       camera.lookAt(eye.clone().add(f.multiplyScalar(3)));
     } else {
