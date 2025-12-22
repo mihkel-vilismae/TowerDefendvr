@@ -40,6 +40,14 @@ export type VfxSpawns = {
   spawnHitFeedback: (pos: Vector2, normal: Vector2) => void;
 };
 
+const NOOP_SPAWNS: VfxSpawns = {
+  spawnFlameSparks: () => {},
+  setHeatHaze: () => {},
+  spawnGrenadeTrail: () => {},
+  spawnScorchDecal: () => {},
+  spawnHitFeedback: () => {},
+};
+
 /**
  * Small, testable VFX state machine.
  *
@@ -56,8 +64,9 @@ export class VfxManager {
   private readonly grenadeAlive = new Map<number, boolean>();
   private grenadeTrailAcc = 0;
 
-  constructor(spawns: VfxSpawns) {
-    this.spawns = spawns;
+  constructor(spawns: Partial<VfxSpawns> = {}) {
+    // Allow tests to pass a minimal stub (or `{}`) and fall back to no-ops.
+    this.spawns = { ...NOOP_SPAWNS, ...spawns };
   }
 
   /**
@@ -118,5 +127,13 @@ export class VfxManager {
       return { visible: false, color: 'red' };
     }
     return { visible: true, color: input.valid ? 'green' : 'red' };
+  }
+
+  /**
+   * Backwards/compat alias for tests and callers that expect an update-style API.
+   * Extra fields (e.g. isXR) are ignored.
+   */
+  updateBuildGhost(input: BuildGhostInput & Record<string, unknown>): BuildGhostOutput {
+    return this.computeBuildGhost(input);
   }
 }
