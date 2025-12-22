@@ -14,6 +14,7 @@ import { TargetingSystem } from './sim/targeting';
 import { createArena, createVehicleMesh, VehicleVisualType } from './render/models';
 import { DistrictPreset } from './render/worldConfig';
 import { ParticleSystem } from './render/particles';
+import { VfxManager } from './render/vfxManager';
 import { TracerRenderer } from './render/tracers';
 import { ReplayBuffer } from './game/replay';
 import { computeDesktopCamera, DesktopCameraMode, cycleDesktopCameraMode } from './render/cameraMath';
@@ -487,6 +488,226 @@ const smoke = new ParticleSystem(2600, {
 });
 tabletop.root.add(smoke.points);
 
+// --- Visual-only VFX helpers (VR-safe) ---
+// Heat haze: a few translucent quads near the FPS muzzle. No postprocessing.
+const heatHazeGroup = new THREE.Group();
+heatHazeGroup.name = 'heatHazeGroup';
+camera.add(heatHazeGroup);
+heatHazeGroup.visible = false;
+
+function makeSoftBlobTexture(): THREE.Texture {
+  const c = document.createElement('canvas');
+  c.width = 64;
+  c.height = 64;
+  const ctx = c.getContext('2d')!;
+  const g = ctx.createRadialGradient(32, 32, 2, 32, 32, 32);
+  g.addColorStop(0, 'rgba(255,255,255,0.85)');
+  g.addColorStop(1, 'rgba(255,255,255,0.0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 64, 64);
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+const softBlobTex = makeSoftBlobTexture();
+const heatHazeMat = new THREE.MeshBasicMaterial({
+  color: 0xffffff,
+  transparent: true,
+  opacity: 0.08,
+  depthWrite: false,
+  map: softBlobTex,
+});
+const heatHazePlanes: THREE.Mesh[] = [];
+for (let i = 0; i < 3; i++) {
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(0.22, 0.22), heatHazeMat);
+  m.position.set(0.06, -0.06, -0.73 - i * 0.04);
+  heatHazeGroup.add(m);
+  heatHazePlanes.push(m);
+}
+
+// Scorch decals (grenade impacts): simple dark circular decal that fades out.
+function makeScorchTexture(): THREE.Texture {
+  const c = document.createElement('canvas');
+  c.width = 128;
+  c.height = 128;
+  const ctx = c.getContext('2d')!;
+  ctx.clearRect(0, 0, c.width, c.height);
+  const g = ctx.createRadialGradient(64, 64, 8, 64, 64, 64);
+  g.addColorStop(0, 'rgba(0,0,0,0.55)');
+  g.addColorStop(0.55, 'rgba(0,0,0,0.25)');
+  g.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 128, 128);
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+const scorchTex = makeScorchTexture();
+const scorchMat = new THREE.MeshBasicMaterial({
+  map: scorchTex,
+  transparent: true,
+  opacity: 0.85,
+  depthWrite: false,
+});
+const scorchGeo = new THREE.PlaneGeometry(4.2, 4.2);
+type Scorch = { mesh: THREE.Mesh; age: number; dur: number };
+const scorchDecals: Scorch[] = [];
+
+function spawnScorchDecal(x: number, z: number): void {
+  const mesh = new THREE.Mesh(scorchGeo, scorchMat.clone());
+  mesh.rotation.x = -Math.PI * 0.5;
+  mesh.position.set(x, 0.011, z);
+  mesh.renderOrder = 1;
+  tabletop.root.add(mesh);
+  scorchDecals.push({ mesh, age: 0, dur: 7.5 + Math.random() * 2.5 });
+}
+
+function updateScorchDecals(dt: number): void {
+  for (let i = scorchDecals.length - 1; i >= 0; i--) {
+    const d = scorchDecals[i];
+    d.age += dt;
+    const t = THREE.MathUtils.clamp(d.age / d.dur, 0, 1);
+    const alpha = 0.85 * (1 - t);
+    const mat = d.mesh.material as THREE.MeshBasicMaterial;
+    mat.opacity = alpha;
+    if (t >= 1) {
+      tabletop.root.remove(d.mesh);
+      d.mesh.geometry.dispose();
+      (d.mesh.material as THREE.Material).dispose();
+      scorchDecals.splice(i, 1);
+    }
+  }
+}
+
+let heatHazeT = 0;
+function updateHeatHaze(dt: number): void {
+  if (!heatHazeGroup.visible) return;
+  heatHazeT += dt;
+  for (let i = 0; i < heatHazePlanes.length; i++) {
+    const p = heatHazePlanes[i];
+    const wob = Math.sin(heatHazeT * (8 + i * 2.5)) * 0.015;
+    p.rotation.z = wob;
+    p.scale.setScalar(1.0 + Math.sin(heatHazeT * 6.0 + i) * 0.08);
+  }
+}
+
+// VR build ghost: a simple preview mesh driven by controller raycast.
+const vrBuildGhost = new THREE.Mesh(
+  new THREE.CylinderGeometry(1.2, 1.2, 0.12, 18),
+  new THREE.MeshBasicMaterial({ color: 0x00ff00, transparent: true, opacity: 0.35, depthWrite: false })
+);
+vrBuildGhost.rotation.x = Math.PI * 0.5;
+vrBuildGhost.visible = false;
+tabletop.root.add(vrBuildGhost);
+
+// Central VFX logic (testable)
+const vfx = new VfxManager({
+  spawnFlameSparks: (origin2, dir2) => {
+    const p = new THREE.Vector3(origin2.x, 0.62, origin2.y);
+    const d = new THREE.Vector3(dir2.x, 0.2, dir2.y).normalize();
+    sparks.setColor(0xffd39b);
+    sparks.spawnDirectionalSparks(p, d, 0.28);
+  },
+  setHeatHaze: (active) => {
+    heatHazeGroup.visible = active && fpsGunRoot.visible;
+  },
+  spawnGrenadeTrail: (pos2, vel2) => {
+    smoke.setColor(0x4e5a66);
+    smoke.spawnTrailPoint(new THREE.Vector3(pos2.x, 0.55, pos2.y), new THREE.Vector3(vel2.x * 0.05, 0.5, vel2.y * 0.05), 0.35);
+  },
+  spawnScorchDecal: (pos2) => spawnScorchDecal(pos2.x, pos2.y),
+  spawnHitFeedback: (pos2, normal2) => {
+    const p = new THREE.Vector3(pos2.x, 0.6, pos2.y);
+    // small flash
+    particles.setColor(0xffffff);
+    particles.spawnExplosion(p, 0.04 * EXPLOSION_INTENSITY_SCALE);
+    // sparks biased away from normal
+    const n = new THREE.Vector3(normal2.x, 0.15, normal2.y).normalize();
+    sparks.setColor(0xfff3c7);
+    sparks.spawnDirectionalSparks(p, n, 0.22);
+    particles.setColor(DEFAULT_PARTICLE_COLOR);
+  },
+});
+
+function updateFlamethrowerVfx(simTime: number): void {
+  if (!sim || !player) return;
+  // World sparks for any flamethrower firing (player or enemies).
+  const sources: Entity[] = [player, ...sim.enemies];
+  for (const ent of sources) {
+    for (const w of ent.weapons) {
+      if (!(w instanceof FlamethrowerWeapon)) continue;
+      const firing = (simTime - w.lastFireTime) <= 0.10;
+      if (!firing) continue;
+      const origin = new Vector2(ent.car.position.x, ent.car.position.y);
+      const dir = new Vector2(Math.cos(ent.car.heading), Math.sin(ent.car.heading));
+      // If player is in Human mode, use muzzle for heat haze + nicer sparks.
+      if (ent === player && (vehicleSel.value as VehicleChoice) === 'human' && fpsGunRoot.visible && !isXRPresenting(renderer)) {
+        const muzzle = new THREE.Vector3();
+        fpsMuzzleFlash.getWorldPosition(muzzle);
+        const q = new THREE.Quaternion();
+        camera.getWorldQuaternion(q);
+        const worldDir = new THREE.Vector3(0, 0, -1).applyQuaternion(q).normalize();
+        vfx.updateFlamethrower({
+          simTime,
+          lastFireTime: w.lastFireTime,
+          origin: new Vector2(muzzle.x, muzzle.z),
+          dir: new Vector2(worldDir.x, worldDir.z).normalize(),
+        });
+      } else {
+        // Non-player / non-FPS: sparks only.
+        vfx.updateFlamethrower({ simTime, lastFireTime: w.lastFireTime, origin, dir });
+      }
+    }
+  }
+}
+
+function updateVrBuildGhost(): void {
+  if (!isXRPresenting(renderer) || gameMode !== 'td_rts_fps') {
+    vrBuildGhost.visible = false;
+    return;
+  }
+  // Only show during build phase and when user is actively placing something.
+  const buildPhase = !!waveScheduler && waveScheduler.isReadyForNextWave();
+  const hasPendingBuild = !!pendingBuildType;
+  if (!buildPhase || !hasPendingBuild) {
+    vrBuildGhost.visible = false;
+    return;
+  }
+  // Raycast controller (c1) to the tabletop ground plane (y=0).
+  const origin = new THREE.Vector3();
+  c1.getWorldPosition(origin);
+  const q = new THREE.Quaternion();
+  c1.getWorldQuaternion(q);
+  const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(q).normalize();
+  if (Math.abs(dir.y) < 1e-4) {
+    vrBuildGhost.visible = false;
+    return;
+  }
+  const t = (0 - origin.y) / dir.y;
+  if (!(t > 0)) {
+    vrBuildGhost.visible = false;
+    return;
+  }
+  const hit = origin.clone().add(dir.multiplyScalar(t));
+  // Validate placement (bounds + overlap + credits).
+  const cost = getBuildCost(pendingBuildType as any);
+  const valid = credits >= cost && Friendly.isPlacementValid(hit.x, hit.z, friendlies);
+  const res = vfx.updateBuildGhost({
+    buildPhase,
+    hasPendingBuild,
+    valid,
+    isXR: true,
+  });
+  vrBuildGhost.visible = res.visible;
+  vrBuildGhost.position.set(hit.x, 0.02, hit.z);
+  const mat = vrBuildGhost.material as THREE.MeshBasicMaterial;
+  mat.color.setHex(res.color === 'green' ? 0x18ff4a : 0xff2d2d);
+}
+
 // Global explosion intensity scale (visual only). Keep explosions compact.
 const EXPLOSION_INTENSITY_SCALE = 0.12;
 
@@ -521,6 +742,24 @@ const missilePrev: { x: number; y: number }[] = [];
 const rocketPrev: { x: number; y: number }[] = [];
 const missileWasAlive: boolean[] = [];
 const rocketWasAlive: boolean[] = [];
+
+// Grenades (visual mesh + smoke trail)
+const grenadeGroup = new THREE.Group();
+tabletop.root.add(grenadeGroup);
+const grenadeGeo = new THREE.SphereGeometry(0.12, 10, 10);
+const grenadeMat = new THREE.MeshStandardMaterial({ color: 0x2b2f3a, roughness: 0.7, metalness: 0.1 });
+const grenadeMeshes = new Map<number, THREE.Mesh>();
+const grenadePrevAlive = new Map<number, boolean>();
+let grenadeIdCounter = 1;
+const grenadeIds = new WeakMap<object, number>();
+
+function getGrenadeId(g: object): number {
+  const ex = grenadeIds.get(g);
+  if (ex) return ex;
+  const id = grenadeIdCounter++;
+  grenadeIds.set(g, id);
+  return id;
+}
 
 // Missile/rocket exhaust "flame" so projectiles read clearly while moving.
 const exhaustGeo = new THREE.ConeGeometry(0.12, 0.35, 10);
@@ -1398,6 +1637,15 @@ function firePrimary(): void {
   fireMachineGun();
 }
 
+function spawnEnemyHitFeedback(shooter: Entity, target: Entity): void {
+  const pos = new Vector2(target.car.position.x, target.car.position.y);
+  const n = new Vector2(
+    target.car.position.x - shooter.car.position.x,
+    target.car.position.y - shooter.car.position.y
+  ).normalize();
+  vfx.onEnemyHit(pos, n);
+}
+
 function fireHumanWeapon(): void {
   if (!sim || !player || !targeting) return;
   const w = player.weapons[humanWeaponIndex];
@@ -1436,6 +1684,7 @@ function fireHumanWeapon(): void {
 
   if (w instanceof FlamethrowerWeapon) {
     w.spray(sim.simTime, getTargetsSorted());
+    if (target.alive) spawnEnemyHitFeedback(player, target);
     particles.setColor(WEAPON_VFX.machinegun.impactColor);
     particles.spawnExplosion(new THREE.Vector3(player.car.position.x, getEntityBaseY(player) + 0.33, player.car.position.y), 0.02 * EXPLOSION_INTENSITY_SCALE);
     particles.setColor(DEFAULT_PARTICLE_COLOR);
@@ -1444,6 +1693,7 @@ function fireHumanWeapon(): void {
 
   if (w instanceof AntiMaterielRifle) {
     w.fire(sim.simTime, target);
+    if (target.alive) spawnEnemyHitFeedback(player, target);
     spawnTracer(player.car.position.x, player.car.position.y, target.car.position.x, target.car.position.y, 'antimateriel');
     // smaller muzzle flash
     particles.setColor(WEAPON_VFX.antimateriel.impactColor);
@@ -1454,6 +1704,7 @@ function fireHumanWeapon(): void {
 
   if (w instanceof MachineGun) {
     w.fire(sim.simTime, target);
+    if (target.alive) spawnEnemyHitFeedback(player, target);
     spawnTracer(player.car.position.x, player.car.position.y, target.car.position.x, target.car.position.y, 'machinegun');
     particles.setColor(WEAPON_VFX.machinegun.impactColor);
     particles.spawnExplosion(new THREE.Vector3(player.car.position.x, getEntityBaseY(player) + 0.35, player.car.position.y), 0.032 * EXPLOSION_INTENSITY_SCALE);
@@ -1509,6 +1760,7 @@ function fireHumanWeaponMouseAim(): void {
     const target = getMouseAimedTarget(candidates);
     if (!target) return;
     w.fire(sim.simTime, target);
+    if (target.alive) spawnEnemyHitFeedback(player, target);
     spawnTracer(player.car.position.x, player.car.position.y, target.car.position.x, target.car.position.y, 'antimateriel');
     triggerFpsMuzzleFlash();
     return;
@@ -1518,6 +1770,7 @@ function fireHumanWeaponMouseAim(): void {
     const target = getMouseAimedTarget(candidates);
     if (!target) return;
     w.fire(sim.simTime, target);
+    if (target.alive) spawnEnemyHitFeedback(player, target);
     spawnTracer(player.car.position.x, player.car.position.y, target.car.position.x, target.car.position.y, 'machinegun');
     triggerFpsMuzzleFlash();
     return;
@@ -1551,6 +1804,7 @@ function fireMachineGun() {
   const ex = target.car.position.x;
   const ez = target.car.position.y;
   mg.fire(sim.simTime, target);
+  if (target.alive) spawnEnemyHitFeedback(player, target);
   const styleKey = am ? 'antimateriel' : (player.hovering ? 'minigun' : 'machinegun');
   spawnTracer(sx, sz, ex, ez, styleKey as any);
   // muzzle flash (keep it small; previous value was too "grenade-like")
@@ -2214,6 +2468,43 @@ function updateParticlesFromProjectiles() {
     }
   }
 
+  // Grenades: smoke trail while airborne + scorch decal on impact.
+  if (sim) {
+    const sources: Entity[] = [player, ...sim.enemies];
+    const states: { id: number; alive: boolean; pos: Vector2; vel: Vector2 }[] = [];
+    for (const ent of sources) {
+      for (const w of ent.weapons) {
+        if (w instanceof GrenadeLauncher) {
+          for (const g of w.grenades) {
+            const id = getGrenadeId(g as any);
+            states.push({
+              id,
+              alive: g.alive,
+              pos: new Vector2(g.position.x, g.position.y),
+              vel: new Vector2(g.velocity.x, g.velocity.y),
+            });
+            // Mesh sync (simple sphere)
+            let mesh = grenadeMeshes.get(id);
+            if (!mesh) {
+              mesh = new THREE.Mesh(grenadeGeo, grenadeMat);
+              mesh.castShadow = true;
+              grenadeGroup.add(mesh);
+              grenadeMeshes.set(id, mesh);
+            }
+            if (g.alive) {
+              mesh.visible = true;
+              mesh.position.set(g.position.x, 0.6, g.position.y);
+            } else {
+              mesh.visible = false;
+            }
+          }
+        }
+      }
+    }
+    // Let VFX manager handle smoke/scorch lifetimes and transitions.
+    vfx.updateGrenades(1 / 60, states);
+  }
+
   // Mine meshes (from all mine weapons in the world)
   if (sim) {
     const sources: Entity[] = [player, ...sim.enemies];
@@ -2297,6 +2588,9 @@ function step(now: number) {
       if (gameMode === 'td_rts_fps') updateFriendlyVisuals();
       syncEntityVisuals(vfxDt);
       updateParticlesFromProjectiles();
+      updateFlamethrowerVfx(sim?.simTime ?? 0);
+      updateScorchDecals(vfxDt);
+      updateHeatHaze(vfxDt);
       particles.update(vfxDt);
       sparks.update(vfxDt);
       smoke.update(vfxDt);
@@ -2518,6 +2812,10 @@ if (!renderer.xr.isPresenting) {
       syncPickupVisuals();
       syncEntityVisuals(vfxDt);
       updateParticlesFromProjectiles();
+      updateFlamethrowerVfx(sim.simTime);
+      updateScorchDecals(vfxDt);
+      updateHeatHaze(vfxDt);
+      updateVrBuildGhost();
       particles.update(vfxDt);
       sparks.update(vfxDt);
       smoke.update(vfxDt);
