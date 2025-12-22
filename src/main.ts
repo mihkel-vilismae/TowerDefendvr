@@ -16,6 +16,7 @@ import { DistrictPreset } from './render/worldConfig';
 import { ParticleSystem } from './render/particles';
 import { VfxManager } from './render/vfxManager';
 import { TracerRenderer } from './render/tracers';
+import { ShockwavePool } from './render/shockwaves';
 import { ReplayBuffer } from './game/replay';
 import { computeDesktopCamera, DesktopCameraMode, cycleDesktopCameraMode } from './render/cameraMath';
 import { TabletopRig } from './xr/tabletop';
@@ -36,13 +37,15 @@ import { TechTree, defaultTechs } from './sim/techTree';
 import { PossessionState } from './sim/possession';
 import { initTdPanel } from './ui/tdPanel';
 import { createMainMenu } from './ui/mainMenu';
+import { createReticleUi } from './ui/reticle';
 import { isXRPresenting } from './xr/xrState';
 import { readVRStick, isVRButtonPressed } from './xr/vrInput';
+import { RecoilSpring } from './fps/recoil';
 import { hookXRButtons } from './xr/xrBindings';
 
 // Refactor helpers
 import { clampArena as clampArenaWorld } from './world/bounds';
-import { applyDefaultLighting } from './world/lighting';
+import { applyCinematicLighting } from './world/cinematicLighting';
 import { createFriendlyMesh as createFriendlyMeshRender, syncFriendlyVisualPositions } from './renderSync/friendlyVisuals';
 
 type VehicleChoice = 'sports' | 'muscle' | 'buggy' | 'tank' | 'heli' | 'human';
@@ -264,7 +267,11 @@ window.addEventListener('keydown', (ev) => {
 
 // Lights
 // Kept in a module so main.ts stays focused on orchestration.
-const { sun, hemi: hemiLight } = applyDefaultLighting(scene);
+const { key: sun, fill: hemiLight } = applyCinematicLighting(scene, renderer, {
+  fog: true,
+  exposure: 1.08,
+  shadows: true,
+});
 
 // Arena + tabletop root
 const tabletop = new TabletopRig();
@@ -316,6 +323,9 @@ mainMenu = createMainMenu({
   },
   getTechTree: () => techTree,
 });
+
+// Screen-space FPS feedback (desktop only)
+const reticleUi = createReticleUi();
 
 // Create a simple mesh for each friendly unit type. Kept in renderSync so main.ts stays smaller.
 function createFriendlyMesh(f: Friendly): THREE.Object3D {
@@ -486,6 +496,9 @@ const smoke = new ParticleSystem(2600, {
   sizePx: 18,
   color: 0x4e5a66,
 });
+
+// World-space shockwaves for explosions (VR-safe, no camera shake).
+const shockwaves = new ShockwavePool(tabletop.root);
 tabletop.root.add(smoke.points);
 
 // --- Visual-only VFX helpers (VR-safe) ---
@@ -948,6 +961,9 @@ function spawnGreatExplosion(pos: THREE.Vector3, tint: number, intensity = 1.0) 
   // Smoke plume (lingers)
   smoke.setColor(0x55606b);
   smoke.spawnSmoke(pos.clone().add(new THREE.Vector3(0, 0.15, 0)), 0.62 * intensity);
+
+  // Shockwave ring (ground-facing)
+  shockwaves.spawn(pos, tint, intensity);
 
   // Radial streaks (readable in VR and on desktop)
   const n = 14;
@@ -1516,6 +1532,13 @@ fpsGunRoot.visible = false;
 let fpsMuzzleFlashFramesLeft = 0;
 let vrCycleWeaponPrev = false;
 
+// Visual-only recoil springs (desktop only; XR uses world-space feedback).
+const recoilKick = new RecoilSpring(); // viewmodel kickback
+const recoilPitch = new RecoilSpring(); // slight upward tilt
+// Slight offset so the weapon reads clearly, even with wider FOV.
+fpsGunRoot.position.set(0.18, -0.15, -0.12);
+const fpsGunBasePos = fpsGunRoot.position.clone();
+
 let locked = false;
 
 function getTargetsSorted(): Entity[] {
@@ -1644,6 +1667,11 @@ function spawnEnemyHitFeedback(shooter: Entity, target: Entity): void {
     target.car.position.y - shooter.car.position.y
   ).normalize();
   vfx.onEnemyHit(pos, n);
+
+  // Screen-space hit marker only for desktop FPS/Human mode.
+  if (shooter === player && fpsGunRoot.visible && !isXRPresenting(renderer)) {
+    reticleUi.flashHit();
+  }
 }
 
 function fireHumanWeapon(): void {
@@ -1661,6 +1689,8 @@ function fireHumanWeapon(): void {
     // Requires lock; lock is computed in the fixed-step update.
     if (!locked) return;
     w.fire(sim.simTime, target);
+    triggerFpsMuzzleFlash();
+    kickFpsRecoil(0.85);
     // visible missile tracer hint (actual projectile visuals are in updateParticlesFromProjectiles)
     spawnTracer(player.car.position.x, player.car.position.y, target.car.position.x, target.car.position.y, 'missile');
     return;
@@ -1674,6 +1704,8 @@ function fireHumanWeapon(): void {
 
   if (w instanceof GrenadeLauncher) {
     w.fire(sim.simTime, target);
+    triggerFpsMuzzleFlash();
+    kickFpsRecoil(0.9);
     // Light tracer hint toward the aim target.
     spawnTracer(player.car.position.x, player.car.position.y, target.car.position.x, target.car.position.y, 'rocket');
     particles.setColor(WEAPON_VFX.rocket.impactColor);
@@ -1684,6 +1716,9 @@ function fireHumanWeapon(): void {
 
   if (w instanceof FlamethrowerWeapon) {
     w.spray(sim.simTime, getTargetsSorted());
+    // Continuous weapon: subtle constant recoil while firing.
+    triggerFpsMuzzleFlash();
+    kickFpsRecoil(0.35);
     if (target.alive) spawnEnemyHitFeedback(player, target);
     particles.setColor(WEAPON_VFX.machinegun.impactColor);
     particles.spawnExplosion(new THREE.Vector3(player.car.position.x, getEntityBaseY(player) + 0.33, player.car.position.y), 0.02 * EXPLOSION_INTENSITY_SCALE);
@@ -1693,6 +1728,8 @@ function fireHumanWeapon(): void {
 
   if (w instanceof AntiMaterielRifle) {
     w.fire(sim.simTime, target);
+    triggerFpsMuzzleFlash();
+    kickFpsRecoil(1.25);
     if (target.alive) spawnEnemyHitFeedback(player, target);
     spawnTracer(player.car.position.x, player.car.position.y, target.car.position.x, target.car.position.y, 'antimateriel');
     // smaller muzzle flash
@@ -1704,6 +1741,8 @@ function fireHumanWeapon(): void {
 
   if (w instanceof MachineGun) {
     w.fire(sim.simTime, target);
+    triggerFpsMuzzleFlash();
+    kickFpsRecoil(0.65);
     if (target.alive) spawnEnemyHitFeedback(player, target);
     spawnTracer(player.car.position.x, player.car.position.y, target.car.position.x, target.car.position.y, 'machinegun');
     particles.setColor(WEAPON_VFX.machinegun.impactColor);
@@ -1750,6 +1789,13 @@ function triggerFpsMuzzleFlash(): void {
   fpsMuzzleFlash.visible = true;
 }
 
+function kickFpsRecoil(strength: number): void {
+  if (isXRPresenting(renderer)) return;
+  // Keep subtle to avoid nausea; viewmodel recoil only.
+  recoilKick.kick(0.9 * strength);
+  recoilPitch.kick(0.6 * strength);
+}
+
 function fireHumanWeaponMouseAim(): void {
   if (!sim || !player) return;
   const w = player.weapons[humanWeaponIndex];
@@ -1763,6 +1809,7 @@ function fireHumanWeaponMouseAim(): void {
     if (target.alive) spawnEnemyHitFeedback(player, target);
     spawnTracer(player.car.position.x, player.car.position.y, target.car.position.x, target.car.position.y, 'antimateriel');
     triggerFpsMuzzleFlash();
+    kickFpsRecoil(1.25);
     return;
   }
   if (w instanceof MachineGun) {
@@ -1773,11 +1820,13 @@ function fireHumanWeaponMouseAim(): void {
     if (target.alive) spawnEnemyHitFeedback(player, target);
     spawnTracer(player.car.position.x, player.car.position.y, target.car.position.x, target.car.position.y, 'machinegun');
     triggerFpsMuzzleFlash();
+    kickFpsRecoil(0.65);
     return;
   }
   // For other weapons (bazooka / stinger), fall back to existing targeting logic.
   fireHumanWeapon();
   triggerFpsMuzzleFlash();
+  kickFpsRecoil(0.85);
 }
 
 function spawnTracer(startX: number, startY: number, endX: number, endY: number, key: keyof typeof WEAPON_VFX) {
@@ -2560,6 +2609,13 @@ function step(now: number) {
   last = now;
   acc += dt * timeScale;
 
+  // VR safety/perf: disable expensive shadows while presenting in XR.
+  // This is a purely visual quality toggle.
+  const xrNow = isXRPresenting(renderer);
+  if (renderer.shadowMap.enabled === xrNow) {
+    renderer.shadowMap.enabled = !xrNow;
+  }
+
   // Replay / kill-cam mode: play last few seconds, then restart
   if (replayActive && sim && player) {
     replayT += dt; // replay in real time
@@ -2594,6 +2650,7 @@ function step(now: number) {
       particles.update(vfxDt);
       sparks.update(vfxDt);
       smoke.update(vfxDt);
+      shockwaves.update(vfxDt);
       updateDebris(vfxDt);
       tracers.update(vfxDt);
     } else {
@@ -2620,10 +2677,32 @@ function step(now: number) {
       fpsGunRoot.visible = false;
     }
 
+    // Reticle feedback is desktop-only (pointer lock / mouse look workflows).
+    reticleUi.setState({
+      visible: fpsGunRoot.visible && !isXRPresenting(renderer),
+      hasTarget: !!targeting?.getTarget(),
+      locked,
+    });
+
     // Muzzle flash lifetime (1–2 frames)
     if (fpsMuzzleFlashFramesLeft > 0) {
       fpsMuzzleFlashFramesLeft--;
       if (fpsMuzzleFlashFramesLeft <= 0) fpsMuzzleFlash.visible = false;
+    }
+
+    // Recoil motion design: quick kick + spring return (desktop only).
+    if (fpsGunRoot.visible && !isXRPresenting(renderer)) {
+      const k = recoilKick.update(dt);
+      const p = recoilPitch.update(dt);
+      fpsGunRoot.position.copy(fpsGunBasePos);
+      fpsGunRoot.position.z += -k * 0.06;
+      fpsGunRoot.position.y += -k * 0.01;
+      fpsGunRoot.rotation.x = -p * 0.03;
+    } else {
+      recoilKick.reset();
+      recoilPitch.reset();
+      fpsGunRoot.position.copy(fpsGunBasePos);
+      fpsGunRoot.rotation.x = 0;
     }
 
 if (!renderer.xr.isPresenting) {
@@ -2648,7 +2727,8 @@ if (!renderer.xr.isPresenting) {
         camera.lookAt(target);
       }
     }
-    if (bloomPass.enabled) composer.render();
+    const useBloom = bloomPass.enabled && !isXRPresenting(renderer);
+    if (useBloom) composer.render();
     else renderer.render(scene, camera);
     return;
   }
@@ -2865,8 +2945,11 @@ if (!renderer.xr.isPresenting) {
   }
 
   // render
-  if (bloomPass.enabled) composer.render();
-  else renderer.render(scene, camera);
+  {
+    const useBloom = bloomPass.enabled && !isXRPresenting(renderer);
+    if (useBloom) composer.render();
+    else renderer.render(scene, camera);
+  }
 }
 
 renderer.setAnimationLoop(step);
