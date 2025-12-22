@@ -146,6 +146,34 @@ export class ParticleSystem {
   }
 
   /**
+   * Directional sparks that prefer a hemisphere around `dir`.
+   * Useful for impact feedback where sparks should travel away from the hit normal.
+   */
+  spawnDirectionalSparks(center: THREE.Vector3, dir: THREE.Vector3, intensity = 1) {
+    const count = Math.min(75, Math.floor((12 + intensity * 55) * this.spawnScale));
+    const d = dir.clone().normalize();
+    for (let i = 0; i < count; i++) {
+      if (this.particles.length >= this.maxParticles) break;
+      // Random vector biased toward `d`.
+      const r = new THREE.Vector3(
+        (Math.random() - 0.5),
+        (Math.random() - 0.2),
+        (Math.random() - 0.5)
+      ).normalize();
+      const biased = r.addScaledVector(d, 1.15).normalize();
+      const speed = (7 + Math.random() * 13) * intensity;
+      this.particles.push({
+        pos: center.clone(),
+        vel: biased.multiplyScalar(speed),
+        life: 0,
+        maxLife: 0.10 + Math.random() * 0.12,
+        drag: 0.86,
+        gravityScale: 1.35,
+      });
+    }
+  }
+
+  /**
    * Longer-lived smoke. Best used with NormalBlending and larger point size.
    */
   spawnSmoke(center: THREE.Vector3, intensity = 1) {
