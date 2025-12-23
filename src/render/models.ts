@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { DistrictPreset, WORLD_PRESETS } from './worldConfig';
+import { mulberry32 } from '../sim/rng';
 
 export type VehicleVisualType = 'sports' | 'muscle' | 'tank' | 'buggy' | 'heli' | 'human' | 'enemy' | 'enemyHeli' | 'onlooker';
 
@@ -179,16 +180,6 @@ export function createVehicleMesh(type: VehicleVisualType): THREE.Object3D {
 
 
 type ArenaOpts = { preset?: DistrictPreset; seed?: number };
-
-function mulberry32(seed: number) {
-  let t = seed >>> 0;
-  return () => {
-    t += 0x6D2B79F5;
-    let r = Math.imul(t ^ (t >>> 15), 1 | t);
-    r ^= r + Math.imul(r ^ (r >>> 7), 61 | r);
-    return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
-  };
-}
 
 function randRange(rng: () => number, a: number, b: number) {
   return a + (b - a) * rng();
