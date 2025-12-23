@@ -9,6 +9,23 @@ export type WeaponVfxKey =
   | 'emp'
   | 'airstrike';
 
+/**
+ * Canonical runtime list of weapon VFX keys.
+ *
+ * Tests should reference this registry rather than hardcoding keys in test files.
+ */
+export const WEAPON_VFX_KEYS = [
+  'machinegun',
+  'antimateriel',
+  'minigun',
+  'shotgun',
+  'mine',
+  'missile',
+  'rocket',
+  'emp',
+  'airstrike',
+] as const satisfies readonly WeaponVfxKey[];
+
 export type WeaponVfxStyle = {
   /** Dotted tracer line for hitscan/burst weapons. */
   tracerColor: number;
