@@ -48,6 +48,7 @@ import { clampArena as clampArenaWorld } from './world/bounds';
 import { applyCinematicLighting } from './world/cinematicLighting';
 import { createFriendlyMesh as createFriendlyMeshRender, syncFriendlyVisualPositions } from './renderSync/friendlyVisuals';
 import { APP_CONFIG } from './config/appConfig';
+import { startRunLoop } from './app/runLoop';
 
 type VehicleChoice = 'sports' | 'muscle' | 'buggy' | 'tank' | 'heli' | 'human';
 
@@ -2958,15 +2959,7 @@ if (!renderer.xr.isPresenting) {
   }
 }
 
-renderer.setAnimationLoop(step);
-
-window.addEventListener('resize', () => {
-  camera.aspect = window.innerWidth / window.innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
-  composer.setSize(window.innerWidth, window.innerHeight);
-  bloomPass.setSize(window.innerWidth, window.innerHeight);
-});
+startRunLoop({ renderer, camera, composer, bloomPass, step });
 
 // boot
 updateHUD();
