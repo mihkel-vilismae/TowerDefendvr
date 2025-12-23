@@ -49,23 +49,34 @@ import { applyCinematicLighting } from './world/cinematicLighting';
 import { createFriendlyMesh as createFriendlyMeshRender, syncFriendlyVisualPositions } from './renderSync/friendlyVisuals';
 import { APP_CONFIG } from './config/appConfig';
 import { startRunLoop } from './app/runLoop';
+import { createHud } from './ui/createHud';
 
 type VehicleChoice = 'sports' | 'muscle' | 'buggy' | 'tank' | 'heli' | 'human';
 
-const app = document.getElementById('app')!;
-const hud = document.getElementById('hud')!;
-const panel = document.getElementById('panel')!;
-
-// Screen-space health bars for vehicles.
-const healthLayer = document.createElement('div');
-healthLayer.style.position = 'absolute';
-healthLayer.style.left = '0';
-healthLayer.style.top = '0';
-healthLayer.style.width = '100%';
-healthLayer.style.height = '100%';
-healthLayer.style.pointerEvents = 'none';
-healthLayer.style.zIndex = '8';
-app.appendChild(healthLayer);
+const {
+  app,
+  hud,
+  panel,
+  healthLayer,
+  startBtn,
+  restartBtn,
+  freezeEnemiesBtn,
+  stopAttacksBtn,
+  enterBuildingBtn,
+  districtSel,
+  vehicleSel,
+  bloomToggle,
+  slowmoToggle,
+  enemyHeliToggle,
+  mouseAimChk,
+  mouseAimStatus,
+  modeSel,
+  lapsSel,
+  startHpSlider,
+  startHpLabel,
+  minimap,
+  vrHelp,
+} = createHud();
 
 const healthBars = new Map<Entity, HTMLDivElement>();
 
@@ -156,27 +167,7 @@ function updateHealthBars(): void {
 function list<K,V>(m: Map<K,V>): [K,V][] { return Array.from(m.entries()); }
 
 
-function el<T extends HTMLElement>(sel: string): T | null {
-  return document.querySelector(sel) as T | null;
-}
-
-// UI elements
-const startBtn = requireEl<HTMLButtonElement>('#startBtn');
-const restartBtn = requireEl<HTMLButtonElement>('#btnRestart');
-const freezeEnemiesBtn = requireEl<HTMLButtonElement>('#btnFreezeEnemies');
-const stopAttacksBtn = requireEl<HTMLButtonElement>('#btnStopAttacks');
-const enterBuildingBtn = requireEl<HTMLButtonElement>('#btnEnterBuilding');
-const districtSel = requireEl<HTMLSelectElement>('#districtSel');
-const vehicleSel = requireEl<HTMLSelectElement>('#vehicleSel');
-const bloomToggle = el<HTMLInputElement>('#bloomToggle');
-const slowmoToggle = el<HTMLInputElement>('#slowmoToggle');
-const enemyHeliToggle = el<HTMLInputElement>('#enemyHeliToggle');
-const mouseAimChk = el<HTMLInputElement>('#mouseAimChk');
-const mouseAimStatus = el<HTMLElement>('#mouseAimStatus');
-const modeSel = requireEl<HTMLSelectElement>('#modeSel');
-const lapsSel = requireEl<HTMLSelectElement>('#lapsSel');
-const startHpSlider = el<HTMLInputElement>('#startHp');
-const startHpLabel = el<HTMLSpanElement>('#startHpLabel');
+// (UI refs moved to createHud.ts)
 
 // ---------------- Main menu (start gate) ----------------
 // The in-game control panel remains available after starting, but the user flow
@@ -196,9 +187,7 @@ districtSel.addEventListener('change', () => {
   localStorage.setItem('deathrally.district', districtSel.value);
 });
 
-// minimap is required for non-VR UX; fail early with a clear error if missing.
-const minimap = requireEl<HTMLCanvasElement>('#minimap');
-const vrHelp = requireEl<HTMLDivElement>('#vrHelp');
+// (minimap + VR help refs moved to createHud.ts)
 
 // --- Three.js setup ---
 const renderer = new THREE.WebGLRenderer({ antialias: true });
