@@ -33,11 +33,26 @@ export type GrenadeState = {
 };
 
 export type VfxSpawns = {
+  /** Flamethrower sparks along the firing line. */
   spawnFlameSparks: (origin: Vector2, dir: Vector2) => void;
+
+  /** Heat-haze toggle (preferred name). */
   setHeatHaze: (active: boolean) => void;
+  /** Heat-haze toggle (legacy/test name). */
+  setHeatHazeActive?: (active: boolean) => void;
+
+  /** Grenade smoke/trail while airborne (preferred name). */
   spawnGrenadeTrail: (pos: Vector2, vel: Vector2) => void;
+  /** Grenade smoke/trail while airborne (legacy/test name). */
+  spawnGrenadeSmoke?: (pos: Vector2, vel: Vector2) => void;
+
+  /** Scorch decal after grenade explosion. */
   spawnScorchDecal: (pos: Vector2) => void;
+
+  /** Enemy hit impact feedback (preferred name). */
   spawnHitFeedback: (pos: Vector2, normal: Vector2) => void;
+  /** Enemy hit impact feedback (legacy/test name). */
+  spawnHitImpact?: (pos: Vector2, normal: Vector2) => void;
 };
 
 const NOOP_SPAWNS: VfxSpawns = {
@@ -57,6 +72,9 @@ const NOOP_SPAWNS: VfxSpawns = {
 export class VfxManager {
   private readonly spawns: VfxSpawns;
 
+  // Internal sim time (used for VFX lifetimes even when callers only provide dt updates).
+  private simTime = 0;
+
   // Flamethrower
   private heatHazeUntil = -Infinity;
 
@@ -65,8 +83,26 @@ export class VfxManager {
   private grenadeTrailAcc = 0;
 
   constructor(spawns: Partial<VfxSpawns> = {}) {
-    // Allow tests to pass a minimal stub (or `{}`) and fall back to no-ops.
-    this.spawns = { ...NOOP_SPAWNS, ...spawns };
+    // Allow tests/callers to pass minimal stubs (or `{}`) and fall back to no-ops.
+    // Also accept legacy/test hook names.
+    const merged = { ...NOOP_SPAWNS, ...spawns } as VfxSpawns;
+    this.spawns = {
+      ...merged,
+      setHeatHaze: merged.setHeatHazeActive ?? merged.setHeatHaze,
+      spawnGrenadeTrail: merged.spawnGrenadeSmoke ?? merged.spawnGrenadeTrail,
+      spawnHitFeedback: merged.spawnHitImpact ?? merged.spawnHitFeedback,
+    };
+  }
+
+  /** Advance internal time and update any time-based toggles. */
+  update(dt: number): void {
+    if (!Number.isFinite(dt) || dt <= 0) {
+      // Still re-apply toggles in case external state changed.
+      this.spawns.setHeatHaze(this.simTime < this.heatHazeUntil);
+      return;
+    }
+    this.simTime += dt;
+    this.spawns.setHeatHaze(this.simTime < this.heatHazeUntil);
   }
 
   /**
@@ -74,12 +110,14 @@ export class VfxManager {
    * This avoids changing gameplay: the sim already controls lastFireTime.
    */
   updateFlamethrower(input: FlamethrowerVfxInput): void {
+    // Keep internal time in sync with the sim-provided timestamp.
+    this.simTime = Math.max(this.simTime, input.simTime);
     const firing = (input.simTime - input.lastFireTime) <= 0.10;
     if (firing) {
       this.spawns.spawnFlameSparks(input.origin, input.dir);
       this.heatHazeUntil = Math.max(this.heatHazeUntil, input.simTime + 0.08);
     }
-    this.spawns.setHeatHaze(input.simTime < this.heatHazeUntil);
+    this.spawns.setHeatHaze(this.simTime < this.heatHazeUntil);
   }
 
   /**
