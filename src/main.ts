@@ -50,6 +50,7 @@ import { createFriendlyMesh as createFriendlyMeshRender, syncFriendlyVisualPosit
 import { APP_CONFIG } from './config/appConfig';
 import { startRunLoop } from './app/runLoop';
 import { createHud } from './ui/createHud';
+import { bindDesktopCameraInputs, DesktopCameraInputState } from './input/bindInputs';
 
 type VehicleChoice = 'sports' | 'muscle' | 'buggy' | 'tank' | 'heli' | 'human';
 
@@ -245,21 +246,12 @@ camera.position.set(APP_CONFIG.CAMERA_START_POS.x, APP_CONFIG.CAMERA_START_POS.y
 camera.lookAt(0, 0, 0);
 
 // --- Desktop camera controls (non-VR) ---
-let desktopCamMode: DesktopCameraMode = 'top';
-let desktopZoom = APP_CONFIG.DESKTOP_ZOOM_START;
+const desktopCameraState: DesktopCameraInputState = {
+  mode: 'top',
+  zoom: APP_CONFIG.DESKTOP_ZOOM_START,
+};
 
-window.addEventListener('wheel', (ev) => {
-  // Don't affect page scroll in some browsers.
-  ev.preventDefault?.();
-  desktopZoom += Math.sign(ev.deltaY) * APP_CONFIG.DESKTOP_ZOOM_WHEEL_STEP;
-  desktopZoom = Math.max(APP_CONFIG.DESKTOP_ZOOM_MIN, Math.min(APP_CONFIG.DESKTOP_ZOOM_MAX, desktopZoom));
-}, { passive: false });
-
-window.addEventListener('keydown', (ev) => {
-  if (ev.key.toLowerCase() === 'c') {
-    desktopCamMode = cycleDesktopCameraMode(desktopCamMode);
-  }
-});
+bindDesktopCameraInputs(desktopCameraState);
 
 // Lights
 // Kept in a module so main.ts stays focused on orchestration.
@@ -2718,7 +2710,7 @@ if (!renderer.xr.isPresenting) {
         camera.position.lerp(eye, 0.25);
         camera.lookAt(eye.clone().add(f.multiplyScalar(3)));
       } else {
-        const { position, target } = computeDesktopCamera(px, pz, player.car.heading, desktopCamMode, desktopZoom);
+        const { position, target } = computeDesktopCamera(px, pz, player.car.heading, desktopCameraState.mode, desktopCameraState.zoom);
         camera.position.lerp(position, 0.14);
         camera.lookAt(target);
       }
@@ -2934,8 +2926,8 @@ if (!renderer.xr.isPresenting) {
       camera.position.lerp(eye, 0.25);
       camera.lookAt(eye.clone().add(f.multiplyScalar(3)));
     } else {
-      const { position, target } = computeDesktopCamera(px, pz, player.car.heading, desktopCamMode, desktopZoom);
-      camera.position.lerp(position, desktopCamMode === 'top' ? 0.12 : 0.14);
+      const { position, target } = computeDesktopCamera(px, pz, player.car.heading, desktopCameraState.mode, desktopCameraState.zoom);
+      camera.position.lerp(position, desktopCameraState.mode === 'top' ? 0.12 : 0.14);
       camera.lookAt(target);
     }
   }
