@@ -2145,7 +2145,7 @@ export function createApp(): void {
   };
 
   const hudPort = {
-    update() {
+    update(_state: any) {
       if (!sim) return;
       updateHUD();
       updateHealthBars();
@@ -2164,7 +2164,7 @@ export function createApp(): void {
 
   type LegacyState = StepState<LegacyState>;
   const state: LegacyState = {
-    step() {
+    step(_input, _dtMs) {
       // Delegate to the existing frame step. Uses `nowMs` tracked by the run loop.
       legacyStep(nowMs);
       return state;
