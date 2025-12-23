@@ -40,6 +40,7 @@ import { createReticleUi } from '../ui/reticle';
 import { isXRPresenting } from '../xr/xrState';
 import { createHealthBarsManager, type HealthBarsManager } from './ui/healthBars';
 import { drawMinimap as drawMinimapUi } from './ui/minimap';
+import { wireUiBindings } from './ui/uiBindings';
 import { readVRStick, isVRButtonPressed } from '../xr/vrInput';
 import { RecoilSpring } from '../fps/recoil';
 import { hookXRButtons } from '../xr/xrBindings';
@@ -921,37 +922,29 @@ export function createApp(): void {
   function setBloom(enabled: boolean) {
     bloomPass.enabled = enabled;
   }
-  setBloom(checkedOr(bloomToggle, true));
-  onChange(bloomToggle, () => setBloom(checkedOr(bloomToggle, true)));
-
-  let timeScale = 1;
-  timeScale = checkedOr(slowmoToggle, false) ? 0.35 : 1;
-  onChange(slowmoToggle, () => {
-    timeScale = checkedOr(slowmoToggle, false) ? 0.35 : 1;
+  const ui = wireUiBindings({
+    startBtn,
+    restartBtn,
+    freezeEnemiesBtn,
+    stopAttacksBtn,
+    enterBuildingBtn,
+    vehicleSel,
+    bloomToggle,
+    slowmoToggle,
+    enemyHeliToggle,
+    mouseAimChk,
+    mouseAimStatus,
+    startHpSlider,
+    startHpLabel,
+    rendererDomElement: renderer.domElement,
+    setBloom,
+    onResetWorld: () => resetWorld(),
+    getSim: () => sim,
+    getPlayer: () => player,
+    getVehicleChoice: () => (vehicleSel.value as VehicleChoice) || 'sports',
+    tryEnterBuildingRoof,
+    setEnemyHelicoptersEnabled,
   });
-
-  // Mouse aiming (FPS) toggle UI
-  function syncMouseAimUi() {
-    if (!mouseAimStatus) return;
-    mouseAimStatus.textContent = checkedOr(mouseAimChk, false) ? 'Mouse aiming: ON' : 'Mouse aiming: OFF';
-  }
-  syncMouseAimUi();
-  onChange(mouseAimChk, () => {
-    syncMouseAimUi();
-    // If disabled while pointer-locked, exit pointer lock.
-    if (!checkedOr(mouseAimChk, false) && document.pointerLockElement === renderer.domElement) {
-      document.exitPointerLock().catch(() => {});
-    }
-  });
-
-  // Start HP slider
-  if (startHpSlider && startHpLabel) {
-    const sync = () => {
-      startHpLabel.textContent = String(startHpSlider.value);
-    };
-    sync();
-    startHpSlider.addEventListener('input', sync);
-  }
 
   // --- Simulation wiring ---
   let sim: GameSimulation | null = null;
@@ -2033,33 +2026,7 @@ export function createApp(): void {
       : 'Arena mode: survive and score. VR: Enter VR button (bottom).';
   }
 
-  startBtn.addEventListener('click', () => resetWorld());
-  restartBtn.addEventListener('click', () => resetWorld());
-
-  freezeEnemiesBtn.addEventListener('click', () => {
-    if (!sim) return;
-    sim.freezeEnemiesMovement = !sim.freezeEnemiesMovement;
-    freezeEnemiesBtn.textContent = sim.freezeEnemiesMovement ? 'Unfreeze' : 'Freeze';
-  });
-
-  stopAttacksBtn.addEventListener('click', () => {
-    if (!sim) return;
-    sim.disableEnemyAttacks = !sim.disableEnemyAttacks;
-    stopAttacksBtn.textContent = sim.disableEnemyAttacks ? 'Attack ON' : 'No-Attack';
-  });
-
-  enterBuildingBtn.addEventListener('click', () => {
-    if (!player) return;
-    const choice = (vehicleSel.value as VehicleChoice) || 'sports';
-    if (choice !== 'human') return;
-    tryEnterBuildingRoof();
-  });
-
-
-  onChange(enemyHeliToggle, () => {
-    if (!sim) return;
-    setEnemyHelicoptersEnabled(checkedOr(enemyHeliToggle, true));
-  });
+  // UI wiring lives in src/app/ui/uiBindings.ts
 
   // --- Main loop ---
   const fixedDt = APP_CONFIG.FIXED_DT;
@@ -2438,7 +2405,7 @@ export function createApp(): void {
   let vfxAccum = 0;
 
   function legacyStep(now: number) {
-    const { dtSec: dt, stepCount } = clock.advance(now / 1000, timeScale);
+    const { dtSec: dt, stepCount } = clock.advance(now / 1000, ui.getTimeScale());
 
     // VR safety/perf: disable expensive shadows while presenting in XR.
     // This is a purely visual quality toggle.
