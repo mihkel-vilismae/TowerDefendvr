@@ -117,4 +117,14 @@ export class TracerRenderer {
     (this.geometry.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true;
     (this.geometry.getAttribute('color') as THREE.BufferAttribute).needsUpdate = true;
   }
+
+  /** Number of currently alive tracer segments (test/debug contract). */
+  getSegmentCount(): number {
+    return this.segments.length;
+  }
+
+  /** Colors of currently alive segments in insertion order (test/debug contract). */
+  getSegmentColors(): number[] {
+    return this.segments.map((s) => s.color);
+  }
 }
