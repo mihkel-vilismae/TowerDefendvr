@@ -51,6 +51,8 @@ import { APP_CONFIG } from './config/appConfig';
 import { startRunLoop } from './app/runLoop';
 import { createHud } from './ui/createHud';
 import { bindDesktopCameraInputs, DesktopCameraInputState } from './input/bindInputs';
+import { createRenderer } from './render/createRenderer';
+import { createSceneAndCamera } from './render/createScene';
 
 type VehicleChoice = 'sports' | 'muscle' | 'buggy' | 'tank' | 'heli' | 'human';
 
@@ -191,35 +193,7 @@ districtSel.addEventListener('change', () => {
 // (minimap + VR help refs moved to createHud.ts)
 
 // --- Three.js setup ---
-const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setPixelRatio(Math.min(2, window.devicePixelRatio));
-renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-renderer.xr.enabled = true;
-// Increase exposure to lift overall scene brightness. This works in tandem with
-// the brighter sun/hemisphere lights to produce a more vivid image.
-renderer.toneMappingExposure = 1.25;
-app.appendChild(renderer.domElement);
-
-// VR performance tuning: drop pixel ratio + particle spawn counts while in XR.
-// This keeps CPU/GPU budgets reasonable on SteamVR, especially with heavy VFX.
-const DESKTOP_PIXEL_RATIO = Math.min(APP_CONFIG.DESKTOP_PIXEL_RATIO_CAP, window.devicePixelRatio);
-const VR_PIXEL_RATIO = APP_CONFIG.VR_PIXEL_RATIO; // conservative for Vive Pro
-
-renderer.xr.addEventListener('sessionstart', () => {
-  renderer.setPixelRatio(VR_PIXEL_RATIO);
-  // Some runtimes expose foveation; safe to call when available.
-  try {
-    (renderer.xr as any).setFoveation?.(1);
-  } catch {
-    // ignore
-  }
-});
-
-renderer.xr.addEventListener('sessionend', () => {
-  renderer.setPixelRatio(DESKTOP_PIXEL_RATIO);
-});
+const { renderer } = createRenderer(app);
 
 // WebXR button
 // SteamVR (HTC Vive Pro) can throw NotSupportedError if we request unsupported features like "layers".
@@ -230,20 +204,7 @@ renderer.xr.addEventListener('sessionend', () => {
 // We'll request the most compatible session init (empty) in VRButtonCompat.
 document.body.appendChild(VRButtonCompat.createButton(renderer));
 
-const scene = new THREE.Scene();
-// Brighten the atmosphere and push the fog farther out. A longer fog end distance
-// improves visibility now that the world is larger.
-scene.fog = new THREE.Fog(APP_CONFIG.FOG_COLOR, APP_CONFIG.FOG_NEAR, APP_CONFIG.FOG_FAR);
-
-const camera = new THREE.PerspectiveCamera(
-  APP_CONFIG.CAMERA_FOV_DEG,
-  window.innerWidth / window.innerHeight,
-  APP_CONFIG.CAMERA_NEAR,
-  APP_CONFIG.CAMERA_FAR
-);
-// Desktop defaults: a closer view so the game is playable in regular browser mode.
-camera.position.set(APP_CONFIG.CAMERA_START_POS.x, APP_CONFIG.CAMERA_START_POS.y, APP_CONFIG.CAMERA_START_POS.z);
-camera.lookAt(0, 0, 0);
+const { scene, camera } = createSceneAndCamera();
 
 // --- Desktop camera controls (non-VR) ---
 const desktopCameraState: DesktopCameraInputState = {
