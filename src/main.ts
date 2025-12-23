@@ -47,6 +47,7 @@ import { hookXRButtons } from './xr/xrBindings';
 import { clampArena as clampArenaWorld } from './world/bounds';
 import { applyCinematicLighting } from './world/cinematicLighting';
 import { createFriendlyMesh as createFriendlyMeshRender, syncFriendlyVisualPositions } from './renderSync/friendlyVisuals';
+import { APP_CONFIG } from './config/appConfig';
 
 type VehicleChoice = 'sports' | 'muscle' | 'buggy' | 'tank' | 'heli' | 'human';
 
@@ -212,8 +213,8 @@ app.appendChild(renderer.domElement);
 
 // VR performance tuning: drop pixel ratio + particle spawn counts while in XR.
 // This keeps CPU/GPU budgets reasonable on SteamVR, especially with heavy VFX.
-const DESKTOP_PIXEL_RATIO = Math.min(2, window.devicePixelRatio);
-const VR_PIXEL_RATIO = 1; // conservative for Vive Pro
+const DESKTOP_PIXEL_RATIO = Math.min(APP_CONFIG.DESKTOP_PIXEL_RATIO_CAP, window.devicePixelRatio);
+const VR_PIXEL_RATIO = APP_CONFIG.VR_PIXEL_RATIO; // conservative for Vive Pro
 
 renderer.xr.addEventListener('sessionstart', () => {
   renderer.setPixelRatio(VR_PIXEL_RATIO);
@@ -241,22 +242,27 @@ document.body.appendChild(VRButtonCompat.createButton(renderer));
 const scene = new THREE.Scene();
 // Brighten the atmosphere and push the fog farther out. A longer fog end distance
 // improves visibility now that the world is larger.
-scene.fog = new THREE.Fog(0x0b0d12, 25, 340);
+scene.fog = new THREE.Fog(APP_CONFIG.FOG_COLOR, APP_CONFIG.FOG_NEAR, APP_CONFIG.FOG_FAR);
 
-const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 900);
+const camera = new THREE.PerspectiveCamera(
+  APP_CONFIG.CAMERA_FOV_DEG,
+  window.innerWidth / window.innerHeight,
+  APP_CONFIG.CAMERA_NEAR,
+  APP_CONFIG.CAMERA_FAR
+);
 // Desktop defaults: a closer view so the game is playable in regular browser mode.
-camera.position.set(0, 65, 75);
+camera.position.set(APP_CONFIG.CAMERA_START_POS.x, APP_CONFIG.CAMERA_START_POS.y, APP_CONFIG.CAMERA_START_POS.z);
 camera.lookAt(0, 0, 0);
 
 // --- Desktop camera controls (non-VR) ---
 let desktopCamMode: DesktopCameraMode = 'top';
-let desktopZoom = 75;
+let desktopZoom = APP_CONFIG.DESKTOP_ZOOM_START;
 
 window.addEventListener('wheel', (ev) => {
   // Don't affect page scroll in some browsers.
   ev.preventDefault?.();
-  desktopZoom += Math.sign(ev.deltaY) * 6;
-  desktopZoom = Math.max(30, Math.min(140, desktopZoom));
+  desktopZoom += Math.sign(ev.deltaY) * APP_CONFIG.DESKTOP_ZOOM_WHEEL_STEP;
+  desktopZoom = Math.max(APP_CONFIG.DESKTOP_ZOOM_MIN, Math.min(APP_CONFIG.DESKTOP_ZOOM_MAX, desktopZoom));
 }, { passive: false });
 
 window.addEventListener('keydown', (ev) => {
@@ -2182,7 +2188,7 @@ onChange(enemyHeliToggle, () => {
 // --- Main loop ---
 let last = performance.now();
 let acc = 0;
-const fixedDt = 1 / 60;
+const fixedDt = APP_CONFIG.FIXED_DT;
 
 function updateHUD() {
   if (!sim || !player) {
