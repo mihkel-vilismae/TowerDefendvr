@@ -2,8 +2,7 @@ import { describe, it, expect } from 'vitest';
 
 import { Car } from '../src/game/car';
 import { computeDesktopCamera, cycleDesktopCameraMode } from '../src/render/cameraMath';
-import * as fs from 'node:fs';
-import * as path from 'node:path';
+import { DESKTOP_DRIVE_KEYMAP } from '../src/controls/desktopKeymap';
 
 describe('desktop view modes', () => {
   it('cycles camera modes top -> chase -> rear -> top', () => {
@@ -40,11 +39,10 @@ describe('WASD driving semantics', () => {
   });
 
   it('main.ts maps W forward, S reverse, A left, D right', () => {
-    const mainPath = path.resolve(__dirname, '../src/main.ts');
-    const txt = fs.readFileSync(mainPath, 'utf8');
-    expect(txt).toMatch(/KeyW.*accelerate|accelerate.*KeyW/s);
-    expect(txt).toMatch(/KeyS.*brake|brake.*KeyS/s);
-    expect(txt).toMatch(/KeyA.*left|left.*KeyA/s);
-    expect(txt).toMatch(/KeyD.*right|right.*KeyD/s);
+    // Contract-based: validate the desktop drive keymap without coupling to entry-point file layout.
+    expect(DESKTOP_DRIVE_KEYMAP.accelerate).toContain('KeyW');
+    expect(DESKTOP_DRIVE_KEYMAP.brake).toContain('KeyS');
+    expect(DESKTOP_DRIVE_KEYMAP.left).toContain('KeyA');
+    expect(DESKTOP_DRIVE_KEYMAP.right).toContain('KeyD');
   });
 });

@@ -52,6 +52,7 @@ import { createHud } from '../ui/createHud';
 import { bindDesktopCameraInputs, DesktopCameraInputState } from '../input/bindInputs';
 import { createRenderer } from '../render/createRenderer';
 import { createSceneAndCamera } from '../render/createScene';
+import { DESKTOP_DRIVE_KEYMAP, keymapAnyPressed } from '../controls/desktopKeymap';
 
 type VehicleChoice = 'sports' | 'muscle' | 'buggy' | 'tank' | 'heli' | 'human';
 
@@ -2677,10 +2678,10 @@ if (!renderer.xr.isPresenting) {
     // Desktop input
     const isXR = renderer.xr.isPresenting;
     const vr = readVRStick(renderer);
-    let accelerate = isXR ? vr.throttle > 0.2 : (key('KeyW') || key('ArrowUp'));
-    let brake = isXR ? vr.throttle < -0.2 : (key('KeyS') || key('ArrowDown'));
-    const left = isXR ? vr.steer < -0.2 : (key('KeyA') || key('ArrowLeft'));
-    const right = isXR ? vr.steer > 0.2 : (key('KeyD') || key('ArrowRight'));
+    let accelerate = isXR ? vr.throttle > 0.2 : keymapAnyPressed(key, DESKTOP_DRIVE_KEYMAP.accelerate);
+    let brake = isXR ? vr.throttle < -0.2 : keymapAnyPressed(key, DESKTOP_DRIVE_KEYMAP.brake);
+    const left = isXR ? vr.steer < -0.2 : keymapAnyPressed(key, DESKTOP_DRIVE_KEYMAP.left);
+    const right = isXR ? vr.steer > 0.2 : keymapAnyPressed(key, DESKTOP_DRIVE_KEYMAP.right);
 
     // If both are held, prefer forward (prevents jitter from canceling).
     if (accelerate && brake) brake = false;
