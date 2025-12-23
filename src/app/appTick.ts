@@ -1,3 +1,6 @@
+import type { AppContext, StepState } from './AppContext';
+import { stepSim } from '../core/sim/stepSim';
+
 export type FixedStepClockConfig = {
   fixedDtSec: number;
   maxFrameDtSec?: number;
@@ -52,4 +55,15 @@ export function createFixedStepClock(config: FixedStepClockConfig) {
       accSec = 0;
     },
   };
+}
+
+/**
+ * Per-frame app tick.
+ * Thin wiring layer that is friendly to unit tests via ports.
+ */
+export function appTick<TState extends StepState<TState>>(ctx: AppContext<TState>, dtMs: number): void {
+  const input = ctx.dom.input.sample();
+  ctx.state = stepSim(ctx.state, input, dtMs);
+  ctx.gfx.render(ctx.state);
+  ctx.dom.hud.update(ctx.state);
 }
