@@ -48,6 +48,7 @@ import { applyCinematicLighting } from '../world/cinematicLighting';
 import { createFriendlyMesh as createFriendlyMeshRender, syncFriendlyVisualPositions } from '../renderSync/friendlyVisuals';
 import { APP_CONFIG } from '../config/appConfig';
 import { startRunLoop } from '../app/runLoop';
+import { createFixedStepClock } from "../app/appTick";
 import { createHud } from '../ui/createHud';
 import { bindDesktopCameraInputs, DesktopCameraInputState } from '../input/bindInputs';
 import { createRenderer } from '../render/createRenderer';
@@ -2122,9 +2123,8 @@ export function createApp(): void {
   });
 
   // --- Main loop ---
-  let last = performance.now();
-  let acc = 0;
   const fixedDt = APP_CONFIG.FIXED_DT;
+  const clock = createFixedStepClock({ fixedDtSec: fixedDt, maxFrameDtSec: 0.05 });
 
   function updateHUD() {
     if (!sim || !player) {
@@ -2547,9 +2547,7 @@ export function createApp(): void {
   let vfxAccum = 0;
 
   function step(now: number) {
-    const dt = Math.min(0.05, (now - last) / 1000);
-    last = now;
-    acc += dt * timeScale;
+    const { dtSec: dt, stepCount } = clock.advance(now / 1000, timeScale);
 
     // VR safety/perf: disable expensive shadows while presenting in XR.
     // This is a purely visual quality toggle.
@@ -2729,10 +2727,8 @@ export function createApp(): void {
       if (key('BracketLeft')) tabletop.adjustScale(-0.004);
       if (key('BracketRight')) tabletop.adjustScale(0.004);
       if (key('Minus')) tabletop.adjustHeight(-0.01);
-      if (key('Equal')) tabletop.adjustHeight(0.01);
-
-      // Fixed simulation steps
-      while (acc >= fixedDt) {
+      if (key('Equal')) tabletop.adjustHeight(0.01);      // Fixed simulation steps
+      for (let __i = 0; __i < stepCount; __i++) {
         // apply movement slow scaling
         const effectiveDt = fixedDt * (player.moveScale ?? 1);
         const prevPos = player.car.position.clone();
@@ -2814,7 +2810,6 @@ export function createApp(): void {
           tabletop.setCenter(player.car.position.x, player.car.position.y);
         }
 
-        acc -= fixedDt;
       }
     }
 
