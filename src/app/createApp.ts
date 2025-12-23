@@ -48,6 +48,9 @@ import { applyCinematicLighting } from '../world/cinematicLighting';
 import { createFriendlyMesh as createFriendlyMeshRender, syncFriendlyVisualPositions } from '../renderSync/friendlyVisuals';
 import { APP_CONFIG } from '../config/appConfig';
 import { startRunLoop } from '../app/runLoop';
+import type { AppContext, InputPort, StepState } from './AppContext';
+import { appTick } from './appTick';
+import { ThreeRenderPort } from '../adapters/three/ThreeRenderPort';
 import { createFixedStepClock } from "../app/appTick";
 import { createHud } from '../ui/createHud';
 import { bindDesktopCameraInputs, DesktopCameraInputState } from '../input/bindInputs';
@@ -2126,6 +2129,58 @@ export function createApp(): void {
   const fixedDt = APP_CONFIG.FIXED_DT;
   const clock = createFixedStepClock({ fixedDtSec: fixedDt, maxFrameDtSec: 0.05 });
 
+  // --- AppContext (test seam) ---
+  // Keep this minimal: ports wrap existing code paths without changing behavior.
+  let nowMs = 0;
+
+  const driveInput: InputPort = {
+    sample() {
+      return {
+        accelerate: keys.has('KeyW'),
+        brake: keys.has('KeyS'),
+        left: keys.has('KeyA'),
+        right: keys.has('KeyD'),
+      };
+    },
+  };
+
+  const hudPort = {
+    update() {
+      if (!sim) return;
+      updateHUD();
+      updateHealthBars();
+      drawMinimap();
+    },
+  };
+
+  const renderPort = new ThreeRenderPort({
+    renderer,
+    composer,
+    bloomPass,
+    scene,
+    camera,
+    isXRPresenting: () => isXRPresenting(renderer),
+  });
+
+  type LegacyState = StepState<LegacyState>;
+  const state: LegacyState = {
+    step() {
+      // Delegate to the existing frame step. Uses `nowMs` tracked by the run loop.
+      legacyStep(nowMs);
+      return state;
+    },
+  };
+
+  const ctx: AppContext<LegacyState> = {
+    nowMs: () => nowMs,
+    raf: (cb) => window.requestAnimationFrame(cb),
+    cancelRaf: (id) => window.cancelAnimationFrame(id),
+    log: (s) => console.log(s),
+    dom: { input: driveInput, hud: hudPort },
+    gfx: { render: (s) => renderPort.render(s) },
+    state,
+  };
+
   function updateHUD() {
     if (!sim || !player) {
       hud.textContent = 'Press Start';
@@ -2546,7 +2601,7 @@ export function createApp(): void {
   // This dramatically reduces main-thread spikes (SteamVR is sensitive to them).
   let vfxAccum = 0;
 
-  function step(now: number) {
+  function legacyStep(now: number) {
     const { dtSec: dt, stepCount } = clock.advance(now / 1000, timeScale);
 
     // VR safety/perf: disable expensive shadows while presenting in XR.
@@ -2599,9 +2654,7 @@ export function createApp(): void {
         if (gameMode === 'td_rts_fps') updateFriendlyVisuals();
         syncEntityVisuals(dt);
       }
-      updateHUD();
-      updateHealthBars();
-      drawMinimap();
+      // HUD/minimap updates handled via AppContext hud port.
 
       if (replayT >= replayEndT) {
         resetWorld();
@@ -2667,9 +2720,6 @@ export function createApp(): void {
           camera.lookAt(target);
         }
       }
-      const useBloom = bloomPass.enabled && !isXRPresenting(renderer);
-      if (useBloom) composer.render();
-      else renderer.render(scene, camera);
       return;
     }
 
@@ -2842,9 +2892,7 @@ export function createApp(): void {
         syncPickupVisuals();
         syncEntityVisuals(dt);
       }
-      updateHUD();
-      updateHealthBars();
-      drawMinimap();
+      // HUD/minimap updates handled via AppContext hud port.
     }
 
     // Desktop camera: playable view with toggleable top/chase mode + mouse wheel zoom.
@@ -2881,15 +2929,15 @@ export function createApp(): void {
       }
     }
 
-    // render
-    {
-      const useBloom = bloomPass.enabled && !isXRPresenting(renderer);
-      if (useBloom) composer.render();
-      else renderer.render(scene, camera);
-    }
+    // Render handled via AppContext gfx port.
   }
 
-  startRunLoop({ renderer, camera, composer, bloomPass, step });
+  const loopStep = (t: number) => {
+    nowMs = t;
+    appTick(ctx, 0);
+  };
+
+  startRunLoop({ renderer, camera, composer, bloomPass, step: loopStep });
 
   // boot
   updateHUD();
