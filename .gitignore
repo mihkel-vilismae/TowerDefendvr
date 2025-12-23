@@ -79,3 +79,4 @@ test-results/
 *.zip
 *.tar
 *.tar.gz
+/package-lock.json
